@@ -4,7 +4,7 @@ A personal workspace for job discovery, AI-powered resume tailoring, and applica
 
 ## 🌟 Key Features
 
-- **Job Feed**: Imported job postings with instant match scoring against your master resume.
+- **Live Job Search**: Current postings from LinkedIn, Indeed, Glassdoor, Naukri and more via JSearch, with instant match scoring against your master resume.
 - **AI Resume Tailoring**: Contextual rewrite of your professional summary and bullet prioritisation without fabrication.
 - **Kanban Board**: Drag-and-drop application tracking with notes, attachments, and status history.
 - **Resume Hub**: Import PDF/DOCX resumes, edit your source of truth, and export tailored versions as PDF or Word.
@@ -24,15 +24,24 @@ The application uses a **Premium Black & Gold** palette inspired by the `ui-ux-p
 2. Upload your resume (PDF, DOCX, TXT, MD or JSON) or fill it in with **Edit**.
 3. Under **AI engine**, set the FreeLLMAPI base URL, paste your unified key (`freellmapi-...`) and click **Save engine**.
 
-### 2. Local server and job import
+### 2. Live job search (JSearch)
+1. Create a free account at [rapidapi.com](https://rapidapi.com), open the [JSearch API](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) and subscribe to the free **Basic** plan (200 requests/month).
+2. Copy your `X-RapidAPI-Key`.
+3. In Vercel: **Project → Settings → Environment Variables**, add `JSEARCH_API_KEY` with that key, then redeploy.
+   - Optional: `JSEARCH_COUNTRY` (two-letter code, default `in`).
+
+`api/jobs.js` runs as a Vercel function, so the key never reaches the browser. Each new search or "Load more" uses one request. Repeat searches are served from the browser cache and Vercel's edge cache for 6 hours.
+
+### 3. Local server and job import
 Requires Node.js.
-```bash
+```powershell
+$env:JSEARCH_API_KEY = "your-rapidapi-key"
 node server.js
 ```
-The app runs at `http://127.0.0.1:4173`. Importing a job by URL needs this local server; it does not run on Vercel.
+The app runs at `http://127.0.0.1:4173`. Importing a single job by URL needs this local server; it does not run on Vercel.
 - Optional: install the [Obscura CLI](https://github.com/h4ckf0r0day/obscura) on your PATH for JavaScript-heavy job pages. Without it, the server falls back to plain HTTP fetching.
 
-### 3. AI providers
+### 4. AI providers
 Choose a provider in **Settings > AI engine**:
 - **FreeLLMAPI** (default): your [FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) gateway (OpenAI-compatible).
 - **OpenAI**: e.g. `gpt-4o-mini`, `gpt-4o`.

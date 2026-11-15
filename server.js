@@ -11,6 +11,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
+const searchJobs = require("./api/jobs.js");
 
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT || 4173);
@@ -278,6 +279,10 @@ const server = http.createServer(async (req, res) => {
           ? `Extracted ${jobs.length} JobPosting record${jobs.length === 1 ? "" : "s"}.`
           : "The page loaded, but no schema.org JobPosting blocks were found. Add the role manually.",
       });
+    }
+
+    if (pathname === "/api/jobs") {
+      return searchJobs(req, res);
     }
 
     if (pathname.startsWith("/api/")) {

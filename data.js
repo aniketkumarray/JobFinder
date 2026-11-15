@@ -1,6 +1,6 @@
 /* ============================================================
    AutoMatch AI — data
-   Jobs come from imports; the resume starts empty until you
+   Jobs come from live search and imports; the resume starts empty until you
    upload or edit yours in Settings.
    ============================================================ */
 

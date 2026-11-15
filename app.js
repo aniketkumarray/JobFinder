@@ -36,7 +36,15 @@
     freellmapi: "FreeLLMAPI · your key",
   };
 
-  const allJobs = () => [...(state.imported || []), ...JOBS];
+  const allJobs = () => {
+    const seen = new Set();
+    const tracked = (state.applications || []).map((app) => app.job).filter(Boolean);
+    return [...(state.imported || []), ...((state.live && state.live.jobs) || []), ...tracked, ...JOBS].filter((job) => {
+      if (seen.has(job.id)) return false;
+      seen.add(job.id);
+      return true;
+    });
+  };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -60,9 +68,12 @@
     return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
   };
 
+  const defaultLive = () => ({ key: "", page: 0, jobs: [], hasMore: false, fetchedAt: 0 });
+
   const defaultState = () => ({
     applications: [],
     imported: [],
+    live: defaultLive(),
     resume: clone(DEFAULT_RESUME),
     prefs: { role: "", location: "", experience: "", remote: false, keywords: "" },
     ai: {
@@ -83,7 +94,15 @@
       const imported = Array.isArray(parsed.imported)
         ? parsed.imported.filter((job) => job && typeof job.id === "string" && typeof job.url === "string")
         : [];
-      const knownJobs = new Set([...imported, ...JOBS].map((job) => job.id));
+      const savedLive = parsed.live && typeof parsed.live === "object" ? parsed.live : {};
+      const live = {
+        ...defaultLive(),
+        ...savedLive,
+        jobs: Array.isArray(savedLive.jobs)
+          ? savedLive.jobs.filter((job) => job && typeof job.id === "string" && typeof job.url === "string")
+          : [],
+      };
+      const knownJobs = new Set([...imported, ...live.jobs, ...JOBS].map((job) => job.id));
       const ai = {
         ...base.ai,
         ...(parsed.ai || {}),
@@ -97,9 +116,12 @@
       if (resume.email === LEGACY_SAMPLE_EMAIL) resume = base.resume;
       return {
         applications: Array.isArray(parsed.applications)
-          ? parsed.applications.filter((app) => app && typeof app.jobId === "string" && knownJobs.has(app.jobId))
+          ? parsed.applications.filter(
+              (app) => app && typeof app.jobId === "string" && (knownJobs.has(app.jobId) || (app.job && app.job.id === app.jobId))
+            )
           : [],
         imported,
+        live,
         resume,
         prefs: { ...base.prefs, ...(parsed.prefs || {}) },
         ai,
@@ -112,6 +134,8 @@
   }
 
   let state = loadState();
+  const LIVE_CACHE_MS = 6 * 3_600_000;
+  let liveSearching = false;
   let currentView = "search";
   let resumeRevision = 0;
   let analysisCache = new Map();
@@ -148,6 +172,10 @@
         appliedAt: null,
       };
       state.applications.push(app);
+    }
+    if (!app.job) {
+      const job = allJobs().find((item) => item.id === jobId);
+      if (job) app.job = job;
     }
     return app;
   }
@@ -307,11 +335,13 @@
     const roleTokens = role.split(/\s+/).filter(Boolean);
     const locationTokens = location.split(/[\/,;]|\bor\b/i).map((token) => token.trim()).filter(Boolean);
 
+    const liveIds = new Set(((state.live && state.live.jobs) || []).map((job) => job.id));
     const jobs = allJobs().filter((job) => {
+      const fromLiveSearch = liveIds.has(job.id);
       const haystack = `${job.title} ${job.company} ${job.location} ${job.category} ${job.team} ${(job.skills || []).join(" ")} ${job.description}`.toLowerCase();
-      if (roleTokens.length && !roleTokens.every((token) => haystack.includes(token))) return false;
+      if (!fromLiveSearch && roleTokens.length && !roleTokens.every((token) => haystack.includes(token))) return false;
 
-      if (locationTokens.length) {
+      if (!fromLiveSearch && locationTokens.length) {
         const matchesLocation = locationTokens.some((token) => {
           if (token === "remote") return job.remote;
           return job.location.toLowerCase().includes(token);
@@ -320,7 +350,7 @@
       }
 
       if (remoteOnly && !job.remote) return false;
-      if (experience && job.experience !== experience) return false;
+      if (experience && job.experience !== "Not specified" && job.experience !== experience) return false;
 
       if (tag !== "All") {
         if (tag === "Remote" && !job.remote) return false;
@@ -419,13 +449,21 @@
       );
     }
 
+    if (liveSearching && !jobs.length) {
+      grid.innerHTML = `
+        <div class="empty-feed">
+          <div class="empty-icon">${icon("refresh")}</div>
+          <h3>Searching live jobs…</h3>
+          <p>Pulling current postings from LinkedIn, Indeed, Glassdoor, Naukri and more.</p>
+        </div>`;
+      return;
+    }
     if (!allJobs().length) {
       grid.innerHTML = `
         <div class="empty-feed">
           <div class="empty-icon">${icon("search")}</div>
-          <h3>No roles yet.</h3>
-          <p>Import a job posting by URL from Settings to start tailoring.</p>
-          <button class="btn btn-primary" type="button" data-view="settings">${icon("settings")}Open settings</button>
+          <h3>Search to see live jobs.</h3>
+          <p>Type a role, skill or company above, add a city if you like, and press Find matches.</p>
         </div>`;
       return;
     }
@@ -439,7 +477,89 @@
         </div>`;
       return;
     }
-    grid.innerHTML = jobs.map((job, index) => jobCardHtml(job, index)).join("");
+    const moreButton = state.live && state.live.hasMore && state.live.jobs.length
+      ? `<div class="load-more">
+          <button class="btn btn-ghost" type="button" data-action="load-more" ${liveSearching ? "disabled" : ""}>
+            ${icon("refresh")}${liveSearching ? "Loading…" : "Load more results"}
+          </button>
+        </div>`
+      : "";
+    grid.innerHTML = jobs.map((job, index) => jobCardHtml(job, index)).join("") + moreButton;
+  }
+
+  function liveSearchKey(prefs) {
+    return JSON.stringify([
+      (prefs.role || "").trim().toLowerCase(),
+      (prefs.location || "").trim().toLowerCase(),
+      Boolean(prefs.remote),
+    ]);
+  }
+
+  function normalizeLiveJob(raw) {
+    const job = normalizeImportedJob(raw);
+    const text = `${job.title} ${job.description}`.toLowerCase();
+    job.skills = KEYWORD_BANK.filter((entry) => keywordInText(text, entry)).map((entry) => entry.label).slice(0, 8);
+    job.description = String(raw.description || "").trim() || job.description;
+    return job;
+  }
+
+  async function searchLiveJobs({ more = false } = {}) {
+    if (liveSearching) return;
+    const role = (state.prefs.role || "").trim();
+    if (role.length < 2) {
+      showToast("Add a role to search", "Type a role, skill or company, then press Find matches.", "info");
+      return;
+    }
+    const key = liveSearchKey(state.prefs);
+    const live = state.live || defaultLive();
+    if (!more && live.key === key && live.jobs.length && Date.now() - live.fetchedAt < LIVE_CACHE_MS) {
+      renderJobs();
+      updateChrome();
+      return;
+    }
+    const page = more ? (live.page || 1) + 1 : 1;
+    const params = new URLSearchParams({ q: role, page: String(page) });
+    if (state.prefs.location) params.set("location", state.prefs.location.trim());
+    if (state.prefs.remote) params.set("remote", "1");
+
+    liveSearching = true;
+    if (!more) state.live = { ...defaultLive(), key };
+    renderJobs();
+    const submit = $("#searchForm .search-submit");
+    if (submit) submit.disabled = true;
+    try {
+      const response = await fetch(`api/jobs?${params}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || (response.status === 404 ? "Live search is not available on this server." : `Search failed (${response.status}).`));
+      }
+      const incoming = (data.jobs || []).map(normalizeLiveJob);
+      const existing = more ? state.live.jobs : [];
+      const ids = new Set(existing.map((job) => job.id));
+      state.live = {
+        key,
+        page,
+        jobs: [...existing, ...incoming.filter((job) => !ids.has(job.id))].slice(0, 100),
+        hasMore: Boolean(data.hasMore),
+        fetchedAt: Date.now(),
+      };
+      analysisCache.clear();
+      saveState();
+      if (!incoming.length && !more) {
+        showToast("No live results", "Try a broader role or a different city.", "info");
+      }
+    } catch (error) {
+      const message = /Failed to fetch|NetworkError/i.test(error.message || "")
+        ? "Could not reach the search service. Check your connection."
+        : error.message;
+      showToast("Search failed", message, "error");
+      console.error("Live job search failed:", error);
+    } finally {
+      liveSearching = false;
+      if (submit) submit.disabled = false;
+      renderJobs();
+      updateChrome();
+    }
   }
 
   function statusCounts() {
@@ -2351,6 +2471,9 @@ HARD RULES:
       case "job-tailor":
         openTailor(jobId);
         break;
+      case "load-more":
+        searchLiveJobs({ more: true });
+        break;
       case "clear-filters":
         state.prefs = { ...state.prefs, role: "", location: "", experience: "", remote: false };
         state.filters = { ...state.filters, tag: "All", sort: "match" };
@@ -2588,10 +2711,15 @@ HARD RULES:
         remote: Boolean($("#remoteToggle")?.checked),
       };
       saveState();
+      if (state.prefs.role) {
+        searchLiveJobs();
+        return;
+      }
       renderJobs();
       updateChrome();
-      const count = filteredJobs().length;
-      if (!count) showToast("No exact matches", "Try clearing the location or broadening the role.", "info");
+      if (allJobs().length && !filteredJobs().length) {
+        showToast("No exact matches", "Try clearing the location or broadening the role.", "info");
+      }
     });
 
     $("#filterChips")?.addEventListener("click", (event) => {
