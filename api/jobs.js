@@ -112,43 +112,81 @@ module.exports = async function handler(req, res) {
 
   if (q.length < 2) return send(res, 400, { ok: false, error: "Enter a role, skill or company to search." });
 
-  const upstream = new URL(JSEARCH_URL);
-  upstream.searchParams.set("query", location && !/^remote$/i.test(location) ? `${q} in ${location}` : q);
-  upstream.searchParams.set("page", String(page));
-  upstream.searchParams.set("num_pages", "1");
-  upstream.searchParams.set("country", country);
-  upstream.searchParams.set("date_posted", date);
-  if (remote || /^remote$/i.test(location)) upstream.searchParams.set("work_from_home", "true");
+  const candidateConfigs = [
+    { url: "https://jsearch.p.rapidapi.com/search-v2", host: "jsearch.p.rapidapi.com" },
+    { url: "https://jsearch.p.rapidapi.com/search", host: "jsearch.p.rapidapi.com" },
+    { url: "https://jsearch-mega.p.rapidapi.com/search", host: "jsearch-mega.p.rapidapi.com" },
+  ];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25_000);
+  
   try {
-    const response = await fetch(upstream.toString(), {
-      signal: controller.signal,
-      headers: { "x-rapidapi-key": key, "x-rapidapi-host": "jsearch.p.rapidapi.com" },
-    });
-    if (!response.ok) {
+    let response = null;
+    let lastErrorDetail = "";
+    let lastStatus = 0;
+
+    for (const config of candidateConfigs) {
+      const upstream = new URL(config.url);
+      upstream.searchParams.set("query", location && !/^remote$/i.test(location) ? `${q} in ${location}` : q);
+      upstream.searchParams.set("page", String(page));
+      upstream.searchParams.set("num_pages", "1");
+      upstream.searchParams.set("country", country);
+      upstream.searchParams.set("date_posted", date);
+      if (remote || /^remote$/i.test(location)) {
+        upstream.searchParams.set("work_from_home", "true");
+        upstream.searchParams.set("remote_jobs_only", "true");
+      }
+
+      response = await fetch(upstream.toString(), {
+        signal: controller.signal,
+        headers: { "x-rapidapi-key": key, "x-rapidapi-host": config.host },
+      });
+
+      if (response.ok) break;
+
+      lastStatus = response.status;
+      if (response.status === 404) {
+        // 404 means this endpoint route/host combination is not active for this account/subscription, try next candidate
+        continue;
+      } else {
+        // 401, 403, 429 etc are fatal auth/quota errors so don't retry endpoints
+        try {
+          const errBody = await response.json();
+          lastErrorDetail = errBody.message || JSON.stringify(errBody);
+        } catch (e) {}
+        break;
+      }
+    }
+
+    if (!response || !response.ok) {
+      const status = response ? response.status : lastStatus;
       const messages = {
         401: "JSearch rejected the API key. Check JSEARCH_API_KEY.",
         403: "JSearch rejected the API key or you are not subscribed to the JSearch plan on RapidAPI.",
         404: "JSearch endpoint not found. The API might have changed or the URL is incorrect.",
         429: "JSearch quota or rate limit reached. Try again later.",
       };
-      let detail = "";
-      try {
-        const errBody = await response.json();
-        detail = errBody.message || JSON.stringify(errBody);
-      } catch (e) {}
       return send(res, 502, { 
         ok: false, 
-        error: messages[response.status] || `JSearch returned ${response.status} ${response.statusText}.`,
-        detail: detail || `URL: ${upstream.toString()}`
+        error: messages[status] || `JSearch returned ${status}.`,
+        detail: lastErrorDetail
       });
     }
+
     const body = await response.json();
-    const jobs = (Array.isArray(body.data) ? body.data : [])
+    const rawJobs = Array.isArray(body.data)
+      ? body.data
+      : Array.isArray(body.data?.jobs)
+      ? body.data.jobs
+      : Array.isArray(body.jobs)
+      ? body.jobs
+      : [];
+
+    const jobs = rawJobs
       .map((job) => mapJob(job, country))
       .filter((job) => job.title && job.url && job.id !== "js-");
+
     return send(
       res,
       200,
