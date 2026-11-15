@@ -531,7 +531,9 @@
       const response = await fetch(`api/jobs?${params}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) {
-        throw new Error(data.error || (response.status === 404 ? "Live search is not available on this server." : `Search failed (${response.status}).`));
+        const error = data.error || (response.status === 404 ? "Live search is not available on this server." : `Search failed (${response.status}).`);
+        const detail = data.detail ? `\n\n${data.detail}` : "";
+        throw new Error(`${error}${detail}`);
       }
       const incoming = (data.jobs || []).map(normalizeLiveJob);
       const existing = more ? state.live.jobs : [];

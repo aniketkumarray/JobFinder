@@ -107,9 +107,8 @@ module.exports = async function handler(req, res) {
   const remote = params.get("remote") === "1";
   const page = Math.min(10, Math.max(1, parseInt(params.get("page"), 10) || 1));
   const date = DATE_FILTERS.has(params.get("date")) ? params.get("date") : "month";
-  const country = /^[a-z]{2}$/.test(params.get("country") || "")
-    ? params.get("country")
-    : (process.env.JSEARCH_COUNTRY || "in").toLowerCase();
+  const countryParam = (params.get("country") || process.env.JSEARCH_COUNTRY || "in").toLowerCase();
+  const country = /^[a-z]{2}$/.test(countryParam) ? countryParam : "in";
 
   if (q.length < 2) return send(res, 400, { ok: false, error: "Enter a role, skill or company to search." });
 
@@ -124,7 +123,7 @@ module.exports = async function handler(req, res) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25_000);
   try {
-    const response = await fetch(upstream, {
+    const response = await fetch(upstream.toString(), {
       signal: controller.signal,
       headers: { "x-rapidapi-key": key, "x-rapidapi-host": "jsearch.p.rapidapi.com" },
     });
@@ -132,9 +131,19 @@ module.exports = async function handler(req, res) {
       const messages = {
         401: "JSearch rejected the API key. Check JSEARCH_API_KEY.",
         403: "JSearch rejected the API key or you are not subscribed to the JSearch plan on RapidAPI.",
+        404: "JSearch endpoint not found. The API might have changed or the URL is incorrect.",
         429: "JSearch quota or rate limit reached. Try again later.",
       };
-      return send(res, 502, { ok: false, error: messages[response.status] || `JSearch returned ${response.status}.` });
+      let detail = "";
+      try {
+        const errBody = await response.json();
+        detail = errBody.message || JSON.stringify(errBody);
+      } catch (e) {}
+      return send(res, 502, { 
+        ok: false, 
+        error: messages[response.status] || `JSearch returned ${response.status} ${response.statusText}.`,
+        detail: detail || `URL: ${upstream.toString()}`
+      });
     }
     const body = await response.json();
     const jobs = (Array.isArray(body.data) ? body.data : [])
