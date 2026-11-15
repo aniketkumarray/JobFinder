@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#080706" />
   <title>AutoMatch AI — Tailored applications, less busywork</title>
-  <meta name="description" content="Find curated roles, tailor your resume with AI, and track every application in one calm workspace." />
+  <meta name="description" content="Find roles, tailor your resume with AI, and track every application in one calm workspace." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -93,8 +93,8 @@
       </div>
 
       <button class="workspace-switch" type="button" data-action="workspace">
-        <span class="ws-avatar">AM</span>
-        <span class="ws-copy"><strong>Personal workspace</strong><small>Prototype mode</small></span>
+        <span class="ws-avatar" data-initials></span>
+        <span class="ws-copy"><strong>Personal workspace</strong><small>Private</small></span>
         <svg class="ws-chevron"><use href="#i-chevron-down"/></svg>
       </button>
 
@@ -124,8 +124,8 @@
           <p id="weeklyHint">Tailor your first role to get moving.</p>
         </div>
         <button class="profile-card" type="button" data-view="settings">
-          <span class="profile-avatar">AM</span>
-          <span class="profile-copy"><strong id="profileName">Aarav Mehta</strong><small id="profileTitle">Senior Product Manager</small></span>
+          <span class="profile-avatar" data-initials></span>
+          <span class="profile-copy"><strong id="profileName">Your name</strong><small id="profileTitle">Your title</small></span>
           <svg><use href="#i-settings"/></svg>
         </button>
       </div>
@@ -140,14 +140,13 @@
           <span class="status-dot"></span>
           <span id="topbarLabel">Discovery</span>
           <span class="crumb-slash">/</span>
-          <span class="crumb-muted" id="topbarHint">12 curated roles</span>
+          <span class="crumb-muted" id="topbarHint"></span>
         </div>
         <div class="topbar-actions">
-          <span class="demo-pill" title="This prototype uses curated demo jobs. Live scraping is available through the optional Obscura bridge."><span class="demo-pulse"></span>Demo data</span>
           <button class="icon-btn" type="button" data-action="notifications" aria-label="Notifications">
             <svg><use href="#i-bell"/></svg><span class="notif-dot"></span>
           </button>
-          <button class="topbar-avatar" type="button" data-view="settings" aria-label="Open settings">AM</button>
+          <button class="topbar-avatar" type="button" data-view="settings" aria-label="Open settings" data-initials></button>
         </div>
       </header>
 
@@ -156,7 +155,7 @@
         <section class="view active" id="view-search">
           <div class="page-head">
             <div class="page-head-copy">
-              <div class="eyebrow"><span class="eyebrow-line"></span>Curated for you · refreshed just now</div>
+              <div class="eyebrow"><span class="eyebrow-line"></span>Your job feed</div>
               <h1>Find your next <span class="grad-cyan">unfair advantage.</span></h1>
               <p class="page-lede">Search less. Apply smarter. Every role below is ready to be matched against your master resume in under three minutes.</p>
             </div>
@@ -278,7 +277,7 @@
               <p class="page-lede">AutoMatch works from one master resume. Keep it factual, tell us how you search, and pick your AI engine.</p>
             </div>
             <div class="head-actions">
-              <span class="local-pill"><svg><use href="#i-shield"/></svg>Local-first prototype</span>
+              <span class="local-pill"><svg><use href="#i-shield"/></svg>Stored in this browser</span>
             </div>
           </div>
 
@@ -300,7 +299,7 @@
                 <div><strong>Drop a resume to replace it</strong><span>PDF, DOCX, TXT, MD or JSON · parsed in your browser</span></div>
                 <span class="upload-link">Browse</span>
               </div>
-              <div class="panel-note"><svg><use href="#i-info"/></svg>Demo mode uses a bundled sample resume. Uploaded files are never sent anywhere.</div>
+              <div class="panel-note"><svg><use href="#i-info"/></svg>Uploaded files are parsed in your browser. Resume text is only sent to your AI provider when you tailor.</div>
             </section>
 
             <section class="panel">
@@ -345,12 +344,11 @@
               <form class="settings-form" id="aiForm">
                 <label class="field-label" for="aiProvider">Provider</label>
                 <select class="text-input" id="aiProvider">
-                  <option value="demo">Demo engine · on-device</option>
+                  <option value="freellmapi">FreeLLMAPI · your key</option>
                   <option value="openai">OpenAI · your key</option>
                   <option value="anthropic">Anthropic · your key</option>
-                  <option value="freellmapi">FreeLLMAPI · your key</option>
                 </select>
-                <div id="aiKeyFields" class="ai-key-fields hidden">
+                <div id="aiKeyFields" class="ai-key-fields">
                   <label class="field-label" for="aiModel">Model</label>
                   <input class="text-input" id="aiModel" type="text" spellcheck="false" />
                   <div id="aiBaseUrlField" class="hidden">
@@ -358,12 +356,8 @@
                     <input class="text-input" id="aiBaseUrl" type="url" spellcheck="false" placeholder="http://localhost:3001/v1" />
                   </div>
                   <label class="field-label" for="aiKey">API key</label>
-                  <input class="text-input" id="aiKey" type="password" spellcheck="false" placeholder="sk-..." />
-                  <p class="field-help"><svg><use href="#i-lock"/></svg>Stored only in this browser. For a real deployment, route calls through a backend.</p>
-                </div>
-                <div class="ai-demo-card" id="aiDemoCard">
-                  <span class="ai-orb-small"><svg><use href="#i-brain"/></svg></span>
-                  <div><strong>On-device simulation</strong><p>Keyword mapping, summary rewrite and factual bullet prioritisation. Nothing leaves your browser.</p></div>
+                  <input class="text-input" id="aiKey" type="password" spellcheck="false" placeholder="freellmapi-..." />
+                  <p class="field-help"><svg><use href="#i-lock"/></svg>Stored only in this browser. If a request fails, an on-device fallback keeps tailoring working.</p>
                 </div>
                 <button class="btn btn-violet btn-full" type="submit"><svg><use href="#i-save"/></svg>Save engine</button>
               </form>
@@ -379,7 +373,7 @@
                 <div class="privacy-row"><span class="privacy-icon"><svg><use href="#i-lock"/></svg></span><div><strong>No fabrication rule</strong><p>Tailoring rephrases and prioritises your real experience. Gaps are disclosed, not invented.</p></div></div>
               </div>
               <div class="danger-zone">
-                <div><strong>Reset the demo</strong><p>Clears applications, notes and settings from this browser.</p></div>
+                <div><strong>Reset workspace</strong><p>Clears applications, notes, settings, API keys and your resume from this browser.</p></div>
                 <button class="btn btn-danger btn-sm" type="button" data-action="reset">Reset workspace</button>
               </div>
             </section>
@@ -388,8 +382,8 @@
           <div class="obscura-note">
             <span class="obscura-mark"><svg><use href="#i-globe"/></svg></span>
             <div class="obscura-copy">
-              <strong>Optional live discovery with Obscura</strong>
-              <p>The prototype ships with curated demo data. Run the included local bridge to scrape fresh listings with <a href="https://github.com/h4ckf0r0day/obscura" target="_blank" rel="noopener">Obscura</a>, or import a single posting below.</p>
+              <strong>Import a job posting</strong>
+              <p>Paste a job link to add it to your feed. Importing needs the local bridge (<code>node server.js</code>), with optional <a href="https://github.com/h4ckf0r0day/obscura" target="_blank" rel="noopener">Obscura</a> for JavaScript-heavy pages.</p>
               <form class="obscura-import" id="obscuraImportForm" autocomplete="off">
                 <label class="sr-only" for="obscuraUrl">Job posting URL</label>
                 <input class="text-input" id="obscuraUrl" type="url" placeholder="https://company.com/careers/job-id" spellcheck="false" />
@@ -434,7 +428,7 @@
             </div>
             <div class="gen-steps" id="genSteps"></div>
             <div class="gen-foot">
-              <span class="gen-engine"><svg><use href="#i-brain"/></svg><span id="genEngineLabel">Demo engine · on-device</span></span>
+              <span class="gen-engine"><svg><use href="#i-brain"/></svg><span id="genEngineLabel">FreeLLMAPI</span></span>
               <button class="btn btn-ghost btn-sm" type="button" data-close="tailor">Cancel</button>
             </div>
           </div>

@@ -1,5 +1,5 @@
 /* ============================================================
-   AutoMatch AI — prototype application logic
+   AutoMatch AI — application logic
    Everything runs locally. Applications persist in localStorage.
    ============================================================ */
 
@@ -28,8 +28,9 @@
     freellmapi: "auto",
   };
   const FREELLMAPI_DEFAULT_URL = "http://localhost:3001/v1";
+  const LEGACY_SAMPLE_EMAIL = "aarav.mehta@example.com";
   const ENGINE_LABELS = {
-    demo: "Demo engine · on-device",
+    demo: "On-device fallback",
     openai: "OpenAI · your key",
     anthropic: "Anthropic · your key",
     freellmapi: "FreeLLMAPI · your key",
@@ -63,10 +64,10 @@
     applications: [],
     imported: [],
     resume: clone(DEFAULT_RESUME),
-    prefs: { role: "", location: "", experience: "", remote: false, keywords: "fintech, growth, AI" },
+    prefs: { role: "", location: "", experience: "", remote: false, keywords: "" },
     ai: {
-      provider: "demo",
-      model: "automatch-local-v1",
+      provider: "freellmapi",
+      model: ENGINE_DEFAULTS.freellmapi,
       keys: { openai: "", anthropic: "", freellmapi: "" },
       baseUrl: FREELLMAPI_DEFAULT_URL,
     },
@@ -79,20 +80,29 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return base;
       const parsed = JSON.parse(raw);
+      const imported = Array.isArray(parsed.imported)
+        ? parsed.imported.filter((job) => job && typeof job.id === "string" && typeof job.url === "string")
+        : [];
+      const knownJobs = new Set([...imported, ...JOBS].map((job) => job.id));
+      const ai = {
+        ...base.ai,
+        ...(parsed.ai || {}),
+        keys: { ...base.ai.keys, ...((parsed.ai && parsed.ai.keys) || {}) },
+      };
+      if (!ai.provider || ai.provider === "demo") {
+        ai.provider = base.ai.provider;
+        ai.model = base.ai.model;
+      }
+      let resume = parsed.resume && typeof parsed.resume === "object" ? parsed.resume : base.resume;
+      if (resume.email === LEGACY_SAMPLE_EMAIL) resume = base.resume;
       return {
         applications: Array.isArray(parsed.applications)
-          ? parsed.applications.filter((app) => app && typeof app.jobId === "string")
+          ? parsed.applications.filter((app) => app && typeof app.jobId === "string" && knownJobs.has(app.jobId))
           : [],
-        imported: Array.isArray(parsed.imported)
-          ? parsed.imported.filter((job) => job && typeof job.id === "string" && typeof job.url === "string")
-          : [],
-        resume: parsed.resume && typeof parsed.resume === "object" ? parsed.resume : base.resume,
+        imported,
+        resume,
         prefs: { ...base.prefs, ...(parsed.prefs || {}) },
-        ai: {
-          ...base.ai,
-          ...(parsed.ai || {}),
-          keys: { ...base.ai.keys, ...((parsed.ai && parsed.ai.keys) || {}) },
-        },
+        ai,
         filters: { ...base.filters, ...(parsed.filters || {}) },
       };
     } catch (error) {
@@ -409,12 +419,22 @@
       );
     }
 
+    if (!allJobs().length) {
+      grid.innerHTML = `
+        <div class="empty-feed">
+          <div class="empty-icon">${icon("search")}</div>
+          <h3>No roles yet.</h3>
+          <p>Import a job posting by URL from Settings to start tailoring.</p>
+          <button class="btn btn-primary" type="button" data-view="settings">${icon("settings")}Open settings</button>
+        </div>`;
+      return;
+    }
     if (!jobs.length) {
       grid.innerHTML = `
         <div class="empty-feed">
           <div class="empty-icon">${icon("search")}</div>
           <h3>No roles match that search yet.</h3>
-          <p>Try a broader title, clear the location, or reset the quick filters. The demo feed has product, analytics and AI roles across India.</p>
+          <p>Try a broader title, clear the location, or reset the quick filters.</p>
           <button class="btn btn-primary" type="button" data-action="clear-filters">${icon("refresh")}Reset filters</button>
         </div>`;
       return;
@@ -468,9 +488,16 @@
 
     if ($("#profileName")) $("#profileName").textContent = state.resume.name || "Your name";
     if ($("#profileTitle")) $("#profileTitle").textContent = state.resume.title || "Your title";
+    const initials = (state.resume.name || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0].toUpperCase())
+      .join("") || "Me";
+    $$("[data-initials]").forEach((el) => { el.textContent = initials; });
 
     const hints = {
-      search: `${filteredJobs().length} curated roles`,
+      search: `${filteredJobs().length} role${filteredJobs().length === 1 ? "" : "s"}`,
       dashboard: `${apps.length} tracked application${apps.length === 1 ? "" : "s"}`,
       settings: "Resume & AI workspace",
     };
@@ -880,7 +907,12 @@ HARD RULES:
   function openTailor(jobId, options = {}) {
     const job = allJobs().find((item) => item.id === jobId);
     if (!job) {
-      showToast("Role not found", "That job is no longer in the curated feed.", "error");
+      showToast("Role not found", "That job is no longer in your feed.", "error");
+      return;
+    }
+    if (!(state.resume.experience || []).length && !(state.resume.summary || "").trim()) {
+      showToast("Add your resume first", "Upload or edit your master resume in Settings, then tailor.", "error");
+      setView("settings");
       return;
     }
     if (!$("#trackModal").hidden) closeModal("track");
@@ -1029,7 +1061,7 @@ HARD RULES:
     let key = (state.ai.keys || {})[provider] || "";
     let engine = provider;
     if (provider !== "demo" && !key) {
-      showToast("API key missing", "Falling back to the on-device demo engine for this run.", "info");
+      showToast("API key missing", "Add your key in Settings → AI engine. Using the on-device fallback for this run.", "error");
       engine = "demo";
     }
     if (engine === "demo") {
@@ -1377,7 +1409,7 @@ HARD RULES:
 
       ${experienceBlocks}
 
-      <p class="diff-note">AutoMatch does not add employers, tools, metrics or achievements. The demo engine only reorders, trims and reframes existing content. If you connect OpenAI or Anthropic, every generated bullet passes a numeric guard before it reaches this view.</p>`;
+      <p class="diff-note">AutoMatch does not add employers, tools, metrics or achievements. Every AI-generated bullet passes a numeric guard before it reaches this view, and the on-device fallback only reorders, trims and reframes existing content.</p>`;
   }
 
   function analysisHtml(job, analysis) {
@@ -2004,7 +2036,7 @@ HARD RULES:
   async function handleResumeFile(file) {
     if (!file) return;
     if (file.size > 6 * 1024 * 1024) {
-      showToast("File too large", "Keep the resume under 6 MB for this prototype.", "error");
+      showToast("File too large", "Keep the resume under 6 MB.", "error");
       return;
     }
     const extension = file.name.split(".").pop().toLowerCase();
@@ -2229,7 +2261,7 @@ HARD RULES:
   }
 
   function hydrateAiForm() {
-    const provider = state.ai.provider || "demo";
+    const provider = state.ai.provider || "freellmapi";
     if ($("#aiProvider")) $("#aiProvider").value = provider;
     if ($("#aiModel")) $("#aiModel").value = state.ai.model || ENGINE_DEFAULTS[provider];
     if ($("#aiKey")) $("#aiKey").value = (state.ai.keys && state.ai.keys[provider]) || "";
@@ -2238,11 +2270,12 @@ HARD RULES:
   }
 
   function updateAiVisibility() {
-    const provider = $("#aiProvider") ? $("#aiProvider").value : "demo";
-    if ($("#aiKeyFields")) $("#aiKeyFields").classList.toggle("hidden", provider === "demo");
-    if ($("#aiDemoCard")) $("#aiDemoCard").classList.toggle("hidden", provider !== "demo");
+    const provider = $("#aiProvider") ? $("#aiProvider").value : "freellmapi";
     if ($("#aiBaseUrlField")) $("#aiBaseUrlField").classList.toggle("hidden", provider !== "freellmapi");
-    if ($("#aiModel") && provider !== "demo" && !$("#aiModel").value) {
+    if ($("#aiKey")) {
+      $("#aiKey").placeholder = { freellmapi: "freellmapi-...", anthropic: "sk-ant-..." }[provider] || "sk-...";
+    }
+    if ($("#aiModel") && !$("#aiModel").value) {
       $("#aiModel").value = ENGINE_DEFAULTS[provider];
     }
   }
@@ -2288,7 +2321,7 @@ HARD RULES:
     const jobId = el.dataset.jobId || "";
     switch (action) {
       case "workspace":
-        showToast("Personal workspace", "This prototype is single-user and stored locally in your browser.", "info");
+        showToast("Personal workspace", "Your workspace is stored locally in this browser.", "info");
         break;
       case "notifications":
         showToast("You're all caught up", "No new alerts. Your next best action is to tailor a role or update a card.", "info");
@@ -2325,7 +2358,7 @@ HARD RULES:
         hydrateSearch();
         renderJobs();
         updateChrome();
-        showToast("Filters cleared", "Showing the full curated feed.", "info");
+        showToast("Filters cleared", "Showing every role in your feed.", "info");
         break;
       case "toggle-jd": {
         const wrap = $("#sideJd");
@@ -2391,7 +2424,7 @@ HARD RULES:
         downloadJsonBackup();
         break;
       case "reset": {
-        if (!confirm("Reset the AutoMatch workspace?\n\nThis clears applications, notes, settings and resume changes from this browser. The demo sample will return.")) return;
+        if (!confirm("Reset the AutoMatch workspace?\n\nThis clears applications, notes, settings, API keys and your resume from this browser.")) return;
         localStorage.removeItem(STORAGE_KEY);
         state = defaultState();
         resumeRevision += 1;
@@ -2403,7 +2436,7 @@ HARD RULES:
         renderDashboard();
         updateChrome();
         setView("search");
-        showToast("Workspace reset", "You're back to the demo workspace.");
+        showToast("Workspace reset", "Applications, notes, resume and settings were cleared.");
         break;
       }
       case "add-experience": {
@@ -2603,7 +2636,7 @@ HARD RULES:
 
     $("#aiForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
-      const provider = $("#aiProvider")?.value || "demo";
+      const provider = $("#aiProvider")?.value || "freellmapi";
       const key = ($("#aiKey")?.value || "").trim();
       const model = ($("#aiModel")?.value || "").trim() || ENGINE_DEFAULTS[provider];
       const baseUrl = ($("#aiBaseUrl")?.value || "").trim() || FREELLMAPI_DEFAULT_URL;
@@ -2611,22 +2644,19 @@ HARD RULES:
         showToast("Check the base URL", "Use the full address, for example http://localhost:3001/v1.", "error");
         return;
       }
-      if (provider !== "demo" && !key) {
-        showToast("Add an API key", "Choose the demo engine or paste a key for the selected provider.", "error");
+      if (!key) {
+        showToast("Add an API key", "Paste the key for the selected provider.", "error");
         return;
       }
       state.ai = {
         provider,
-        model: provider === "demo" ? ENGINE_DEFAULTS.demo : model,
+        model,
         keys: { ...(state.ai.keys || {}), [provider]: key },
         baseUrl,
       };
       saveState();
       updateAiVisibility();
-      showToast(
-        provider === "demo" ? "Demo engine active" : "AI engine connected",
-        provider === "demo" ? "Keyword mapping and factual prioritisation run in your browser." : "Keys stay in this browser. Calls go directly to the provider."
-      );
+      showToast("AI engine connected", "Keys stay in this browser. Calls go directly to the provider.");
     });
 
     $("#editResumeBtn")?.addEventListener("click", openResumeEditor);

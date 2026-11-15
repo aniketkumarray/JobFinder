@@ -1,6 +1,6 @@
 /* ============================================================
    AutoMatch AI — optional local bridge
-   Serves the prototype and exposes two scraping helpers backed
+   Serves the app and exposes two scraping helpers backed
    by Obscura (https://github.com/h4ckf0r0day/obscura).
 
    Run:  node server.js
@@ -311,7 +311,7 @@ if (require.main === module) {
     const health = await obscuraHealth(true);
     console.log(`\nAutoMatch AI running at http://${HOST}:${PORT}`);
     console.log(health.obscura ? `Obscura bridge online · ${health.version}` : `Obscura not detected: ${health.error}`);
-    console.log("The UI works without Obscura using curated demo data.\n");
+    console.log("Job import falls back to plain HTTP fetching without Obscura.\n");
   });
 }
 
