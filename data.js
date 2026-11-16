@@ -13,11 +13,15 @@ window.AUTOMATCH_DEFAULT_RESUME = {
   phone: "",
   location: "",
   website: "",
+  links: [],
   summary: "",
-  experience: [],
   skills: [],
+  skillGroups: [],
+  experience: [],
+  projects: [],
   education: [],
   certifications: [],
+  awards: [],
 };
 
 window.AUTOMATCH_KEYWORDS = [

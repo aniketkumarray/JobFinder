@@ -114,6 +114,7 @@
       }
       let resume = parsed.resume && typeof parsed.resume === "object" ? parsed.resume : base.resume;
       if (resume.email === LEGACY_SAMPLE_EMAIL) resume = base.resume;
+      resume = normalizeResume(resume);
       return {
         applications: Array.isArray(parsed.applications)
           ? parsed.applications.filter(
@@ -247,10 +248,16 @@
         role.company,
         role.title,
         role.location,
+        role.intro,
         ...(role.bullets || []),
       ]),
-      ...(resume.education || []).flatMap((edu) => [edu.school, edu.degree]),
+      ...(resume.projects || []).flatMap((project) => [project.name, project.tech, project.description]),
+      ...(resume.education || []).flatMap((edu) => {
+        const parts = educationParts(edu);
+        return [parts.title, parts.institution, parts.detail];
+      }),
       ...(resume.certifications || []),
+      ...(resume.awards || []),
     ];
     return parts.filter(Boolean).join(" \n ");
   }
@@ -307,6 +314,124 @@
     const entry = KEYWORD_BANK.find((item) => item.label === label);
     if (!entry) return false;
     return keywordInText(resumeText().toLowerCase(), entry);
+  }
+
+  const BULLET_RE = /^[•●▪◦]\s*|^[-*–—]\s+/;
+
+  // Split on separators that are not inside brackets, so "Prioritization (RICE, MoSCoW)" stays whole.
+  function splitTopLevel(text, separators = ",") {
+    const parts = [];
+    let depth = 0;
+    let buffer = "";
+    for (const char of String(text || "")) {
+      if (char === "(" || char === "[") depth += 1;
+      else if (char === ")" || char === "]") depth = Math.max(0, depth - 1);
+      if (depth === 0 && separators.includes(char)) {
+        parts.push(buffer);
+        buffer = "";
+        continue;
+      }
+      buffer += char;
+    }
+    parts.push(buffer);
+    return parts.map((part) => part.trim()).filter(Boolean);
+  }
+
+  // Joins a wrapped line onto the previous one, repairing words split at a line-end hyphen.
+  function joinWrapped(previous, next) {
+    if (!previous) return next;
+    return /[A-Za-z]-$/.test(previous) && /^[a-z]/.test(next) ? previous + next : `${previous} ${next}`;
+  }
+
+  // "AI Assignment Checker: Defined a ..." -> { label: "AI Assignment Checker", rest: "Defined a ..." }
+  function splitBulletLabel(text) {
+    const match = String(text || "").match(/^([A-Z][^:.;,()]{1,38}?):\s+(\S[\s\S]*)$/);
+    if (match && match[1].trim().split(/\s+/).length <= 5 && !/\d/.test(match[1])) {
+      return { label: match[1].trim(), rest: match[2] };
+    }
+    return { label: "", rest: String(text || "") };
+  }
+
+  // "Tools: Jira, Figma" lines -> [{ label: "Tools", items: ["Jira", "Figma"] }]; wrapped lines continue the previous group.
+  function parseSkillGroups(lines) {
+    const groups = [];
+    let current = null;
+    lines.forEach((line) => {
+      const text = String(line).replace(BULLET_RE, "").trim();
+      if (!text) return;
+      const match = text.match(/^([A-Za-z][A-Za-z0-9 &/+.\-]{1,38}):\s*(.*)$/);
+      if (match && match[1].trim().split(/\s+/).length <= 5) {
+        current = { label: match[1].trim(), text: match[2] };
+        groups.push(current);
+      } else if (current) {
+        current.text = joinWrapped(current.text, text);
+      } else {
+        current = { label: "", text };
+        groups.push(current);
+      }
+    });
+    return groups
+      .map((group) => ({
+        label: group.label,
+        items: splitTopLevel(group.text, ",;|•·").filter((item) => item.length > 1 && item.length < 70),
+      }))
+      .filter((group) => group.items.length);
+  }
+
+  const linkHref = (value) => {
+    const text = String(value || "").trim();
+    if (/^https?:\/\//i.test(text)) return text;
+    if (/^mailto:/i.test(text)) return text;
+    if (/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(text)) return `mailto:${text}`;
+    return `https://${text}`;
+  };
+
+  function educationParts(edu = {}) {
+    return {
+      title: edu.title ?? edu.school ?? "",
+      institution: edu.institution ?? edu.degree ?? "",
+      detail: edu.detail ?? "",
+      dates: edu.dates ?? "",
+    };
+  }
+
+  function flattenSkillGroups(groups) {
+    const seen = new Set();
+    return (groups || [])
+      .flatMap((group) => group.items || [])
+      .filter((item) => {
+        const key = String(item).toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  // Brings resumes saved by older versions up to the current shape.
+  function normalizeResume(input) {
+    const resume = { ...clone(DEFAULT_RESUME), ...(input && typeof input === "object" ? clone(input) : {}) };
+    resume.links = Array.isArray(resume.links) ? resume.links.map(String).filter(Boolean) : [];
+    if (!resume.links.length && resume.website) resume.links = splitTopLevel(resume.website, "|,");
+    resume.website = resume.links[0] || resume.website || "";
+    resume.skillGroups = (Array.isArray(resume.skillGroups) ? resume.skillGroups : [])
+      .filter((group) => group && Array.isArray(group.items) && group.items.length)
+      .map((group) => ({ label: String(group.label || ""), items: group.items.map(String) }));
+    resume.skills = resume.skillGroups.length ? flattenSkillGroups(resume.skillGroups) : (Array.isArray(resume.skills) ? resume.skills : []);
+    resume.experience = (Array.isArray(resume.experience) ? resume.experience : []).map((role) => ({
+      ...role,
+      intro: role.intro || "",
+      bullets: Array.isArray(role.bullets) ? role.bullets : [],
+    }));
+    resume.projects = (Array.isArray(resume.projects) ? resume.projects : []).map((project) => ({
+      name: project.name || "",
+      tech: project.tech || "",
+      description: project.description || "",
+      links: Array.isArray(project.links) ? project.links.filter((link) => link && link.url) : [],
+    }));
+    resume.education = Array.isArray(resume.education) ? resume.education : [];
+    resume.certifications = Array.isArray(resume.certifications) ? resume.certifications : [];
+    resume.awards = Array.isArray(resume.awards) ? resume.awards : [];
+    return resume;
   }
 
   function emphasize(text, labels) {
@@ -650,7 +775,7 @@
           <span>${icon("mail")}${escapeHtml(resume.email || "Add an email")}</span>
           <span>${icon("phone")}${escapeHtml(resume.phone || "Add a phone")}</span>
           <span>${icon("map-pin")}${escapeHtml(resume.location || "Add a location")}</span>
-          ${resume.website ? `<span>${icon("globe")}${escapeHtml(resume.website)}</span>` : ""}
+          ${(resume.links || []).length ? `<span>${icon("globe")}${escapeHtml(resume.links.join(" · "))}</span>` : ""}
         </div>
       </div>
       <div>
@@ -827,6 +952,21 @@
     return Array.from(new Set([...priority, ...rest])).slice(0, 26);
   }
 
+  // Keeps each skill group and its label; only moves skills that match the job to the front of their group.
+  function tailorSkillGroups(groups, priority) {
+    const wanted = priority.map((item) => String(item).toLowerCase()).filter(Boolean);
+    const isWanted = (skill) => {
+      const lower = String(skill).toLowerCase();
+      return wanted.some(
+        (item) => item === lower || (item.length >= 3 && lower.includes(item)) || (lower.length >= 3 && item.includes(lower))
+      );
+    };
+    return (groups || []).map((group) => ({
+      label: group.label,
+      items: [...group.items.filter(isWanted), ...group.items.filter((item) => !isWanted(item))],
+    }));
+  }
+
   function simulateTailoredResume(job, analysis) {
     const master = state.resume;
     const strengths = analysis.matched.slice(0, 5).map((item) => item.label);
@@ -835,21 +975,18 @@
       summary = `${summary.replace(/\.$/, "")}. Core strengths for this ${job.title} mandate: ${list(strengths)}.`;
     }
 
+    const priority = [...(job.skills || []), ...analysis.matched.map((item) => item.label)];
+    const skillGroups = tailorSkillGroups(master.skillGroups, priority);
+
     return {
-      name: master.name,
-      title: master.title,
-      email: master.email,
-      phone: master.phone,
-      location: master.location,
-      website: master.website,
+      ...clone(master),
       summary,
-      skills: prioritizedSkills(job, analysis),
-      experience: (master.experience || []).map((role, index) => ({
+      skillGroups,
+      skills: skillGroups.length ? flattenSkillGroups(skillGroups) : prioritizedSkills(job, analysis),
+      experience: (master.experience || []).map((role) => ({
         ...role,
-        bullets: rankBullets(role.bullets, analysis, index === 0 ? 4 : 3),
+        bullets: rankBullets(role.bullets, analysis, (role.bullets || []).length),
       })),
-      education: clone(master.education || []),
-      certifications: clone(master.certifications || []),
     };
   }
 
@@ -887,7 +1024,8 @@ HARD RULES:
 - Never invent employers, titles, dates, degrees, certifications, tools, metrics or outcomes.
 - Do not add a skill unless it is already evidenced in the master resume.
 - Preserve every number and metric exactly as written.
-- You may rephrase, reorder and trim existing bullets to emphasise relevance to the target role.
+- You may rephrase and reorder existing bullets to emphasise relevance to the target role. Keep every bullet; do not drop any.
+- Many bullets start with a short label followed by a colon (for example "AI Assignment Checker: ..."). Keep that label exactly as written at the start of the same bullet.
 - Keep the candidate's real job titles and companies unchanged.
 - Output valid JSON with no markdown fences and no commentary.`;
   }
@@ -1010,18 +1148,28 @@ HARD RULES:
     const modelSkills = Array.isArray(data.skills)
       ? data.skills.map((skill) => String(skill).trim()).filter((skill) => skill.length > 1 && allowedSkill(skill))
       : [];
-    const skills = Array.from(new Set([...modelSkills, ...fallback.skills]));
+    const skillGroups = master.skillGroups && master.skillGroups.length
+      ? tailorSkillGroups(master.skillGroups, [...modelSkills, ...(job.skills || []), ...analysis.matched.map((item) => item.label)])
+      : [];
+    const skills = skillGroups.length ? flattenSkillGroups(skillGroups) : Array.from(new Set([...modelSkills, ...fallback.skills]));
 
+    const labelOf = (bullet) => splitBulletLabel(bullet).label.toLowerCase();
     const modelRoles = Array.isArray(data.experience) ? data.experience : [];
     const experience = (master.experience || []).map((role, index) => {
       const match = modelRoles.find(
         (item) => item && String(item.company || "").trim().toLowerCase() === String(role.company || "").toLowerCase()
       ) || modelRoles[index];
       const rawBullets = match && Array.isArray(match.bullets) ? match.bullets : [];
-      const safeBullets = rawBullets
+      let safeBullets = rawBullets
         .map((bullet) => String(bullet).replace(/\s+/g, " ").trim())
         .filter((bullet) => bullet.length > 15 && !containsNewNumbers(bullet, allowedNumbers))
-        .slice(0, 6);
+        .slice(0, Math.max((role.bullets || []).length, 6));
+      // Bold lead-in labels ("AI Assignment Checker:") are part of the resume format; if the model dropped them, use the original bullets.
+      const masterLabels = new Set((role.bullets || []).map(labelOf).filter(Boolean));
+      if (masterLabels.size) {
+        const kept = safeBullets.filter((bullet) => masterLabels.has(labelOf(bullet))).length;
+        if (kept < Math.ceil(masterLabels.size * 0.6)) safeBullets = [];
+      }
       return {
         ...role,
         bullets: safeBullets.length ? safeBullets : fallback.experience[index]?.bullets || role.bullets,
@@ -1032,6 +1180,7 @@ HARD RULES:
       ...clone(master),
       summary,
       skills,
+      skillGroups,
       experience,
     };
   }
@@ -1291,91 +1440,135 @@ HARD RULES:
     if ($("#analysisContent")) $("#analysisContent").innerHTML = analysisHtml(job, analysis);
   }
 
-  function paperHtml(resume, analysis) {
-    const labels = (analysis.matched || []).map((item) => item.label);
-    const matchedLabels = new Set(labels);
-    const contact = [resume.email, resume.phone, resume.location, resume.website].filter(Boolean);
-    return `
+  // Mirrors the master CV layout: centred header, ruled section headings, grouped skills,
+  // role title / "Company | Location | Dates" / intro / labelled bullets, projects, education, certifications & awards.
+  function paperHtml(resume) {
+    const sep = `<span class="sep">|</span>`;
+    const join = (items) => items.filter(Boolean).join(sep);
+    const section = (title, body) => `<section class="paper-section"><div class="paper-section-title">${title}</div>${body}</section>`;
+    const link = (text, href) => `<a href="${escapeHtml(linkHref(href || text))}">${escapeHtml(text)}</a>`;
+    const bulletHtml = (text) => {
+      const { label, rest } = splitBulletLabel(text);
+      return label ? `<strong>${escapeHtml(label)}:</strong> ${escapeHtml(rest)}` : escapeHtml(rest);
+    };
+
+    const links = (resume.links && resume.links.length ? resume.links : splitTopLevel(resume.website, "|,"));
+    const contactLine = join([
+      resume.location && escapeHtml(resume.location),
+      resume.phone && escapeHtml(resume.phone),
+      resume.email && link(resume.email),
+    ]);
+    const header = `
       <header class="paper-header">
-        <div class="paper-name">${escapeHtml(resume.name)}</div>
-        <div class="paper-role">${escapeHtml(resume.title)}</div>
-        <div class="paper-contact">${contact.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
-      </header>
+        <div class="paper-name">${escapeHtml(String(resume.name || "").toUpperCase())}</div>
+        ${resume.title ? `<div class="paper-role">${escapeHtml(resume.title)}</div>` : ""}
+        ${contactLine ? `<div class="paper-contact">${contactLine}</div>` : ""}
+        ${links.length ? `<div class="paper-contact">${join(links.map((item) => link(item)))}</div>` : ""}
+      </header>`;
 
-      <section class="paper-section">
-        <div class="paper-section-title">Professional Summary</div>
-        <p class="paper-summary">${emphasize(resume.summary, labels)}</p>
-      </section>
+    const summary = resume.summary ? section("Professional Summary", `<p class="paper-p">${escapeHtml(resume.summary)}</p>`) : "";
 
-      <section class="paper-section">
-        <div class="paper-section-title">Core Competencies</div>
-        <div class="paper-skills">
-          ${(resume.skills || []).map((skill) => `<span class="paper-skill ${matchedLabels.has(skill) ? "emphasis" : ""}">${escapeHtml(skill)}</span>`).join("")}
-        </div>
-      </section>
+    const groups = resume.skillGroups || [];
+    const skills = groups.length
+      ? section("Skills", groups.map((group) => `<p class="paper-p paper-skill-line">${group.label ? `<strong>${escapeHtml(group.label)}:</strong> ` : ""}${escapeHtml(group.items.join(", "))}</p>`).join(""))
+      : (resume.skills || []).length
+        ? section("Skills", `<p class="paper-p">${escapeHtml(resume.skills.join(", "))}</p>`)
+        : "";
 
-      <section class="paper-section">
-        <div class="paper-section-title">Experience</div>
-        ${(resume.experience || []).map((role) => `
+    const experience = (resume.experience || []).length
+      ? section("Professional Experience", resume.experience.map((role) => `
           <div class="paper-role-item">
-            <div class="paper-role-head">
-              <strong>${escapeHtml(role.title || "Role")}</strong>
-              <span>${escapeHtml(role.dates || "")}</span>
-            </div>
-            <div class="paper-role-sub">
-              <span>${escapeHtml(role.company || "")}${role.location ? ` · ${escapeHtml(role.location)}` : ""}</span>
-            </div>
-            <ul class="paper-bullets">
-              ${(role.bullets || []).map((bullet) => `<li>${emphasize(bullet, labels)}</li>`).join("")}
-            </ul>
-          </div>`).join("")}
-      </section>
+            <div class="paper-role-title">${escapeHtml(role.title || "Role")}</div>
+            <div class="paper-role-meta">${join([
+              role.company && `<strong>${escapeHtml(role.company)}</strong>`,
+              role.location && escapeHtml(role.location),
+              role.dates && escapeHtml(role.dates),
+            ])}</div>
+            ${role.intro ? `<p class="paper-role-intro">${escapeHtml(role.intro)}</p>` : ""}
+            ${(role.bullets || []).length ? `<ul class="paper-bullets">${role.bullets.map((bullet) => `<li>${bulletHtml(bullet)}</li>`).join("")}</ul>` : ""}
+          </div>`).join(""))
+      : "";
 
-      ${(resume.education || []).length ? `
-        <section class="paper-section">
-          <div class="paper-section-title">Education</div>
-          ${(resume.education || []).map((edu) => `
-            <div class="paper-edu">
-              <div><strong>${escapeHtml(edu.school || "")}</strong><p>${escapeHtml(edu.degree || "")}</p></div>
-              <span>${escapeHtml(edu.dates || "")}</span>
-            </div>`).join("")}
-        </section>` : ""}
+    const projects = (resume.projects || []).length
+      ? section("Projects", `<ul class="paper-bullets">${resume.projects.map((project) => {
+          const head = project.tech
+            ? `<strong>${escapeHtml(project.name)}</strong> <span class="paper-muted">(${escapeHtml(project.tech)}):</span>`
+            : `<strong>${escapeHtml(project.name)}:</strong>`;
+          const projectLinks = (project.links || []).length
+            ? ` ${join(project.links.map((item) => link(item.label || "Link", item.url)))}`
+            : "";
+          return `<li>${head} ${escapeHtml(project.description || "")}${projectLinks}</li>`;
+        }).join("")}</ul>`)
+      : "";
 
-      ${(resume.certifications || []).length ? `
-        <section class="paper-section">
-          <div class="paper-section-title">Certifications</div>
-          <div class="paper-skills">
-            ${(resume.certifications || []).map((cert) => `<span class="paper-skill">${escapeHtml(cert)}</span>`).join("")}
-          </div>
-        </section>` : ""}`;
+    const education = (resume.education || []).length
+      ? section("Education", resume.education.map((edu) => {
+          const parts = educationParts(edu);
+          const first = `<strong>${escapeHtml(parts.title)}</strong>${parts.institution ? ` – ${escapeHtml(parts.institution)}` : ""}`;
+          return `<p class="paper-p paper-edu">${join([first, parts.detail && escapeHtml(parts.detail), parts.dates && escapeHtml(parts.dates)])}</p>`;
+        }).join(""))
+      : "";
+
+    const certs = (resume.certifications || []).length;
+    const awards = (resume.awards || []).length;
+    const credentials = certs || awards
+      ? section(
+          certs && awards ? "Certifications &amp; Awards" : awards ? "Awards" : "Certifications",
+          `${certs ? `<p class="paper-p">${escapeHtml(resume.certifications.join("; "))}</p>` : ""}${
+            awards ? `<p class="paper-p paper-awards"><strong>Awards:</strong> ${escapeHtml(resume.awards.join("; "))}</p>` : ""
+          }`
+        )
+      : "";
+
+    return [header, summary, skills, experience, projects, education, credentials].join("");
   }
 
   function resumePlainText(resume) {
     const lines = [];
-    lines.push(resume.name || "");
+    const links = resume.links && resume.links.length ? resume.links : splitTopLevel(resume.website, "|,");
+    lines.push(String(resume.name || "").toUpperCase());
     lines.push(resume.title || "");
-    lines.push([resume.email, resume.phone, resume.location, resume.website].filter(Boolean).join(" | "));
+    lines.push([resume.location, resume.phone, resume.email].filter(Boolean).join(" | "));
+    if (links.length) lines.push(links.join(" | "));
     lines.push("");
     lines.push("PROFESSIONAL SUMMARY");
     lines.push(resume.summary || "");
     lines.push("");
-    lines.push("CORE COMPETENCIES");
-    lines.push((resume.skills || []).join(", "));
+    lines.push("SKILLS");
+    if ((resume.skillGroups || []).length) {
+      resume.skillGroups.forEach((group) => lines.push(`${group.label ? `${group.label}: ` : ""}${group.items.join(", ")}`));
+    } else {
+      lines.push((resume.skills || []).join(", "));
+    }
     lines.push("");
-    lines.push("EXPERIENCE");
+    lines.push("PROFESSIONAL EXPERIENCE");
     (resume.experience || []).forEach((role) => {
-      lines.push(`${role.title || ""} — ${role.company || ""} | ${role.dates || ""}${role.location ? ` | ${role.location}` : ""}`);
+      lines.push(role.title || "");
+      lines.push([role.company, role.location, role.dates].filter(Boolean).join(" | "));
+      if (role.intro) lines.push(role.intro);
       (role.bullets || []).forEach((bullet) => lines.push(`• ${bullet}`));
       lines.push("");
     });
-    if ((resume.education || []).length) {
-      lines.push("EDUCATION");
-      (resume.education || []).forEach((edu) => lines.push(`${edu.school || ""} — ${edu.degree || ""} | ${edu.dates || ""}`));
+    if ((resume.projects || []).length) {
+      lines.push("PROJECTS");
+      resume.projects.forEach((project) => {
+        const urls = (project.links || []).map((item) => `${item.label}: ${item.url}`).join(" | ");
+        lines.push(`• ${project.name}${project.tech ? ` (${project.tech})` : ""}: ${project.description || ""}${urls ? ` ${urls}` : ""}`);
+      });
       lines.push("");
     }
-    if ((resume.certifications || []).length) {
-      lines.push("CERTIFICATIONS");
-      (resume.certifications || []).forEach((cert) => lines.push(`• ${cert}`));
+    if ((resume.education || []).length) {
+      lines.push("EDUCATION");
+      (resume.education || []).forEach((edu) => {
+        const parts = educationParts(edu);
+        lines.push([`${parts.title}${parts.institution ? ` – ${parts.institution}` : ""}`, parts.detail, parts.dates].filter(Boolean).join(" | "));
+      });
+      lines.push("");
+    }
+    if ((resume.certifications || []).length || (resume.awards || []).length) {
+      lines.push((resume.certifications || []).length && (resume.awards || []).length ? "CERTIFICATIONS & AWARDS" : (resume.awards || []).length ? "AWARDS" : "CERTIFICATIONS");
+      if ((resume.certifications || []).length) lines.push(resume.certifications.join("; "));
+      if ((resume.awards || []).length) lines.push(`Awards: ${resume.awards.join("; ")}`);
     }
     return lines.join("\n");
   }
@@ -1706,36 +1899,45 @@ HARD RULES:
     }
   }
 
-  function documentStyles() {
+  // Layout measured from the master CV (Calibri; 20pt name, 11pt headings, 10pt body; #1f2a44 text, #55555f secondary).
+  function paperCss() {
     return `
-      @page { size: A4; margin: 13mm 14mm; }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: #fff; color: #221d17; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.5; }
-      .paper { width: 100%; max-width: 100%; background: #fff; color: #221d17; padding: 0; }
-      .paper-header { text-align: center; padding-bottom: 12px; border-bottom: 1.5px solid #2a241c; }
-      .paper-name { font-family: Arial, Helvetica, sans-serif; font-size: 25pt; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
-      .paper-role { font-size: 10.5pt; color: #5c5348; letter-spacing: 0.04em; margin-top: 3px; }
-      .paper-contact { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 7px; font-size: 8.5pt; color: #544b3f; }
-      .paper-section { margin-top: 14px; }
-      .paper-section-title { font-size: 8.5pt; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #16120c; padding-bottom: 3px; border-bottom: 1px solid #cdc4b4; margin-bottom: 7px; }
-      .paper-summary { color: #3a332a; }
-      .paper-skills { display: flex; flex-wrap: wrap; gap: 4px 6px; }
-      .paper-skill { font-size: 8.5pt; padding: 1px 5px; border-radius: 3px; background: #f2eee5; color: #443c31; border: 1px solid #e4ded1; }
-      .paper-skill.emphasis { background: #f2eee5; color: #443c31; border-color: #e4ded1; }
-      .paper-role-item { margin-bottom: 10px; page-break-inside: avoid; }
-      .paper-role-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-      .paper-role-head strong { font-size: 10.5pt; font-weight: 700; color: #17130e; }
-      .paper-role-head span { font-size: 8pt; color: #726a5c; white-space: nowrap; }
-      .paper-role-sub { display: flex; justify-content: space-between; gap: 12px; font-size: 9pt; color: #625a4e; margin-top: 1px; }
-      .paper-bullets { margin: 4px 0 0; padding-left: 14px; }
-      .paper-bullets li { margin-bottom: 2.5px; color: #3a332a; }
-      .paper mark { background: transparent; color: inherit; padding: 0; }
-      .paper-edu { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
-      .paper-edu strong { font-size: 9.5pt; }
-      .paper-edu span { font-size: 8pt; color: #726a5c; white-space: nowrap; }
-      .paper-edu p { font-size: 9pt; color: #625a4e; margin: 1px 0 0; }
-      .paper-footnote { display: none; }`;
+      .paper-header { text-align: center; }
+      .paper-name { margin: 0; font-size: 20pt; font-weight: 700; color: #1f2a44; }
+      .paper-role { margin-top: 1pt; font-size: 11pt; font-weight: 700; color: #55555f; }
+      .paper-contact { margin-top: 2pt; font-size: 9.5pt; color: #1f2a44; }
+      .paper-contact + .paper-contact { margin-top: 1pt; }
+      .paper .sep, .paper-header .sep, .sep { color: #9a9aa6; margin: 0 3pt; }
+      .paper a, .paper-header a, .paper-section a { color: #1e5687; text-decoration: underline; }
+      .paper-section { margin-top: 8pt; }
+      .paper-section-title { margin-bottom: 3pt; padding-bottom: 2pt; border-bottom: 0.75pt solid #1f2a44; font-size: 11pt; font-weight: 700; text-transform: uppercase; color: #1f2a44; page-break-after: avoid; }
+      .paper-p { margin: 0; }
+      .paper-skill-line + .paper-skill-line { margin-top: 2.3pt; }
+      .paper-role-item { margin-top: 6.2pt; }
+      .paper-section-title + .paper-role-item { margin-top: 5.8pt; }
+      .paper-role-title { font-size: 10.6pt; font-weight: 700; color: #1f2a44; page-break-after: avoid; }
+      .paper-role-meta { color: #55555f; page-break-after: avoid; }
+      .paper-role-intro { margin: 1.8pt 0 1.9pt; color: #55555f; }
+      .paper-bullets { margin: 0; padding-left: 15pt; }
+      .paper-bullets li { margin-top: 1.8pt; page-break-inside: avoid; }
+      .paper-section-title + .paper-bullets li:first-child { margin-top: 0; }
+      .paper-muted { color: #55555f; }
+      .paper-edu + .paper-edu { margin-top: 1.8pt; }
+      .paper-awards { margin-top: 2.8pt; }
+      .paper mark { background: transparent; color: inherit; padding: 0; }`;
   }
+
+  // Browsers round Calibri's "normal" line height up by ~0.5pt per line, so the PDF/print view uses the exact 1.22 ratio.
+  // Word reads a numeric line-height as a multiple of single spacing, so the Word file keeps "normal".
+  function documentStyles({ word = false } = {}) {
+    return `
+      @page { size: A4; margin: 36pt 41pt; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #fff; color: #1f2a44; font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; font-size: 10pt; line-height: ${word ? "normal" : "1.22"}; }
+      ${paperCss()}`;
+  }
+
+  document.head.insertAdjacentHTML("beforeend", `<style id="paperCss">${paperCss()}</style>`);
 
   function downloadPdf() {
     if (!currentTailor || !currentTailor.snapshot) return;
@@ -1764,7 +1966,7 @@ HARD RULES:
     const snapshot = currentTailor.snapshot;
     const html = `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
       <head><meta charset="utf-8"><title>${escapeHtml(snapshot.resume.name)} — ${escapeHtml(job.company)}</title>
-      <style>${documentStyles()}</style></head>
+      <style>${documentStyles({ word: true })}</style></head>
       <body>${paperHtml(snapshot.resume, snapshot.analysis)}</body></html>`;
     const blob = new Blob(["\ufeff", html], { type: "application/msword" });
     const url = URL.createObjectURL(blob);
@@ -1972,10 +2174,12 @@ HARD RULES:
         <div class="exp-fields">
           <div><label class="field-label">Job title</label><input class="text-input" data-exp-field="title" value="${escapeHtml(role.title || "")}" placeholder="Senior Product Manager" /></div>
           <div><label class="field-label">Company</label><input class="text-input" data-exp-field="company" value="${escapeHtml(role.company || "")}" placeholder="Company" /></div>
-          <div><label class="field-label">Dates</label><input class="text-input" data-exp-field="dates" value="${escapeHtml(role.dates || "")}" placeholder="2021 — Present" /></div>
-          <div><label class="field-label">Location</label><input class="text-input" data-exp-field="location" value="${escapeHtml(role.location || "")}" placeholder="Mumbai" /></div>
+          <div><label class="field-label">Dates</label><input class="text-input" data-exp-field="dates" value="${escapeHtml(role.dates || "")}" placeholder="Jan 2024 – Present" /></div>
+          <div><label class="field-label">Location</label><input class="text-input" data-exp-field="location" value="${escapeHtml(role.location || "")}" placeholder="Mumbai, India" /></div>
         </div>
-        <label class="field-label">Bullets — one per line</label>
+        <label class="field-label">Intro line (optional, shown in grey under the company)</label>
+        <textarea data-exp-field="intro" spellcheck="false" style="min-height:48px;margin-bottom:11px">${escapeHtml(role.intro || "")}</textarea>
+        <label class="field-label">Bullets — one per line. Start with "Label:" to get a bold lead-in</label>
         <textarea data-exp-field="bullets" spellcheck="false">${escapeHtml((role.bullets || []).join("\n"))}</textarea>
       </div>`;
   }
@@ -1993,7 +2197,7 @@ HARD RULES:
           <div><label class="field-label">Email</label><input class="text-input" data-resume-field="email" value="${escapeHtml(resume.email || "")}" /></div>
           <div><label class="field-label">Phone</label><input class="text-input" data-resume-field="phone" value="${escapeHtml(resume.phone || "")}" /></div>
           <div><label class="field-label">Location</label><input class="text-input" data-resume-field="location" value="${escapeHtml(resume.location || "")}" /></div>
-          <div><label class="field-label">Website / LinkedIn</label><input class="text-input" data-resume-field="website" value="${escapeHtml(resume.website || "")}" /></div>
+          <div><label class="field-label">Links — separate with |</label><input class="text-input" data-resume-field="links" value="${escapeHtml((resume.links || []).join(" | "))}" placeholder="linkedin.com/in/you | github.com/you" /></div>
         </div>
       </div>
 
@@ -2001,8 +2205,12 @@ HARD RULES:
         <div class="form-section-head"><h3>Summary & skills</h3></div>
         <label class="field-label">Professional summary</label>
         <textarea class="text-input" data-resume-field="summary">${escapeHtml(resume.summary || "")}</textarea>
-        <label class="field-label" style="margin-top:11px">Skills — comma separated</label>
-        <textarea class="text-input" data-resume-field="skills" style="min-height:58px">${escapeHtml((resume.skills || []).join(", "))}</textarea>
+        <label class="field-label" style="margin-top:11px">Skills — one group per line, like "Tools: Jira, Figma, SQL"</label>
+        <textarea class="text-input" data-resume-field="skills" style="min-height:96px">${escapeHtml(
+          (resume.skillGroups || []).length
+            ? resume.skillGroups.map((group) => `${group.label ? `${group.label}: ` : ""}${group.items.join(", ")}`).join("\n")
+            : (resume.skills || []).join(", ")
+        )}</textarea>
       </div>
 
       <div class="form-section">
@@ -2016,11 +2224,30 @@ HARD RULES:
       </div>
 
       <div class="form-section">
-        <div class="form-section-head"><h3>Education & certifications</h3></div>
-        <label class="field-label">Education — one per line: School | Degree | Dates</label>
-        <textarea class="text-input" data-resume-field="education" style="min-height:70px">${escapeHtml((resume.education || []).map((edu) => `${edu.school || ""} | ${edu.degree || ""} | ${edu.dates || ""}`).join("\n"))}</textarea>
+        <div class="form-section-head"><h3>Projects</h3></div>
+        <label class="field-label">One per line: Name | Tech | Description | Live=https://… | Code=https://…</label>
+        <textarea class="text-input" data-resume-field="projects" spellcheck="false" style="min-height:96px">${escapeHtml(
+          (resume.projects || [])
+            .map((project) => [project.name, project.tech, project.description, ...(project.links || []).map((link) => `${link.label}=${link.url}`)].join(" | "))
+            .join("\n")
+        )}</textarea>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-head"><h3>Education, certifications & awards</h3></div>
+        <label class="field-label">Education — one per line: Degree | Institution | Extra (optional, e.g. CGPA) | Year</label>
+        <textarea class="text-input" data-resume-field="education" style="min-height:70px">${escapeHtml(
+          (resume.education || [])
+            .map((edu) => {
+              const parts = educationParts(edu);
+              return [parts.title, parts.institution, parts.detail, parts.dates].join(" | ");
+            })
+            .join("\n")
+        )}</textarea>
         <label class="field-label" style="margin-top:11px">Certifications — one per line</label>
         <textarea class="text-input" data-resume-field="certifications" style="min-height:58px">${escapeHtml((resume.certifications || []).join("\n"))}</textarea>
+        <label class="field-label" style="margin-top:11px">Awards — one per line</label>
+        <textarea class="text-input" data-resume-field="awards" style="min-height:48px">${escapeHtml((resume.awards || []).join("\n"))}</textarea>
       </div>`;
     openModal("resume");
   }
@@ -2055,28 +2282,55 @@ HARD RULES:
         title: get("title"),
         dates: get("dates"),
         location: get("location"),
+        intro: get("intro").replace(/\s+/g, " "),
         bullets: get("bullets").split("\n").map((line) => line.trim()).filter(Boolean),
       };
     }).filter((role) => role.title || role.company || role.bullets.length);
 
-    const education = field("education").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const lines = (value) => value.split("\n").map((line) => line.trim()).filter(Boolean);
+
+    const education = lines(field("education")).map((line) => {
       const parts = line.split("|").map((part) => part.trim());
-      return { school: parts[0] || "", degree: parts[1] || "", dates: parts[2] || "" };
+      const last = parts.length > 2 ? parts[parts.length - 1] : "";
+      return {
+        title: parts[0] || "",
+        institution: parts[1] || "",
+        detail: parts.length > 3 ? parts.slice(2, -1).join(" | ") : "",
+        dates: parts.length > 2 ? last : "",
+      };
     });
 
-    state.resume = {
+    const projects = lines(field("projects")).map((line) => {
+      const parts = line.split("|").map((part) => part.trim());
+      const links = [];
+      const rest = [];
+      parts.slice(2).forEach((part, index) => {
+        const labelled = part.match(/^([A-Za-z][A-Za-z ]{1,14})=(https?:\/\/\S+)$/);
+        if (labelled) links.push({ label: labelled[1].trim(), url: labelled[2] });
+        else if (/^https?:\/\/\S+$/i.test(part)) links.push({ label: links.length ? "Code" : "Live", url: part });
+        else rest.push(part);
+      });
+      return { name: parts[0] || "", tech: parts[1] || "", description: rest.join(" | "), links };
+    }).filter((project) => project.name);
+
+    const skillGroups = parseSkillGroups(lines(field("skills")));
+
+    state.resume = normalizeResume({
       name,
       title,
       email: field("email"),
       phone: field("phone"),
       location: field("location"),
-      website: field("website"),
+      links: splitTopLevel(field("links"), "|,"),
       summary: field("summary"),
-      skills: field("skills").split(/[,\n]/).map((skill) => skill.trim()).filter(Boolean),
+      skills: skillGroups.length ? [] : field("skills").split(/[,\n]/).map((skill) => skill.trim()).filter(Boolean),
+      skillGroups,
       experience,
+      projects,
       education,
-      certifications: field("certifications").split("\n").map((line) => line.trim()).filter(Boolean),
-    };
+      certifications: lines(field("certifications")),
+      awards: lines(field("awards")),
+    });
     resumeRevision += 1;
     analysisCache.clear();
     saveState();
@@ -2119,9 +2373,23 @@ HARD RULES:
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
         const page = await pdf.getPage(pageNumber);
         const content = await page.getTextContent();
+        // Hyperlink annotations carry the real URLs behind words like "Live" and "Code".
+        const annotations = await page.getAnnotations().catch(() => []);
+        const pageLinks = annotations.filter((note) => note.subtype === "Link" && note.url && note.rect);
+        const linkFor = (item) => {
+          if (!/^(live|code|demo|github|link|source|website|portfolio|case study)$/i.test(item.str.trim())) return "";
+          const x = item.transform[4] + (item.width || 0) / 2;
+          const baseline = item.transform[5];
+          const hit = pageLinks.find(
+            (note) => x >= note.rect[0] - 1 && x <= note.rect[2] + 1 && baseline >= note.rect[1] - 3 && baseline <= note.rect[3] + 3
+          );
+          return hit ? hit.url : "";
+        };
         const rows = new Map();
         content.items.forEach((item) => {
           if (!item.str || !item.str.trim()) return;
+          const url = linkFor(item);
+          if (url) item = { ...item, str: `⟦${item.str.trim()}|${url}⟧` };
           const y = Math.round(item.transform[5]);
           let key = null;
           for (const existing of rows.keys()) {
@@ -2181,7 +2449,7 @@ HARD RULES:
         const parsed = JSON.parse(await file.text());
         const resume = parsed.resume || parsed;
         if (!resume || !Array.isArray(resume.experience)) throw new Error("That JSON does not look like a resume.");
-        state.resume = resume;
+        state.resume = normalizeResume(resume);
         resumeRevision += 1;
         analysisCache.clear();
         saveState();
@@ -2212,6 +2480,19 @@ HARD RULES:
     }
   }
 
+  const DATE_RANGE_RE = /(?:19|20)\d{2}\s*[–—-]\s*(?:(?:[A-Za-z]{3,9}\.?\s+)?(?:19|20)\d{2}|present|current|now)/i;
+
+  const isMetaLine = (line) =>
+    Boolean(line) && line.length < 170 && (DATE_RANGE_RE.test(line) || (/\|/.test(line) && /(?:19|20)\d{2}|present/i.test(line)));
+
+  // "Company | Location | Jan 2024 – Present" -> { company, location, dates }
+  function parseMetaLine(line) {
+    const parts = line.split(/\s*\|\s*/).map((part) => part.trim()).filter(Boolean);
+    const dates = parts.find((part) => /(?:19|20)\d{2}|present|current/i.test(part)) || "";
+    const others = parts.filter((part) => part !== dates);
+    return { company: others[0] || "", location: others.slice(1).join(", "), dates };
+  }
+
   function parseRoleHeader(header, fallbackTitle) {
     const parts = header
       .split(/\s*[|•]\s*|\s+[—–]\s+|\s+at\s+/i)
@@ -2220,7 +2501,7 @@ HARD RULES:
     const yearParts = parts.filter((part) => /\b(19|20)\d{2}\b/.test(part));
     const nonYear = parts.filter((part) => !/\b(19|20)\d{2}\b/.test(part));
     const titleLike = (value) => /(manager|analyst|engineer|designer|developer|lead|director|consultant|intern|specialist|architect|scientist|officer|head)/i.test(value);
-    let title = nonYear.find(titleLike) || nonYear[0] || fallbackTitle;
+    const title = nonYear.find(titleLike) || nonYear[0] || fallbackTitle;
     const company = nonYear.find((part) => part !== title) || "";
     let dates = yearParts.join(" · ");
     if (!dates) {
@@ -2232,6 +2513,7 @@ HARD RULES:
       company,
       dates,
       location: "",
+      intro: "",
       bullets: [],
     };
   }
@@ -2239,55 +2521,118 @@ HARD RULES:
   function parseExperienceSection(lines, fallbackTitle) {
     const roles = [];
     let current = null;
+    let last = "";
+    const blankRole = (extra = {}) => ({ company: "", title: fallbackTitle, dates: "", location: "", intro: "", bullets: [], ...extra });
+
     for (let index = 0; index < lines.length; index += 1) {
       const raw = lines[index];
-      const bullet = /^[•\-*–—]\s+/.test(raw);
-      const clean = raw.replace(/^[•\-*–—]\s+/, "").trim();
+      const isBullet = BULLET_RE.test(raw);
+      const clean = raw.replace(BULLET_RE, "").trim();
       if (!clean) continue;
 
-      if (bullet) {
-        if (!current) current = { company: "", title: fallbackTitle, dates: "", location: "", bullets: [] };
+      if (isBullet) {
+        if (!current) current = blankRole();
         current.bullets.push(clean);
+        last = "bullet";
         continue;
       }
 
-      const yearHere = /\b(19|20)\d{2}\b/.test(clean);
       const nextRaw = lines[index + 1] || "";
-      const nextClean = nextRaw.replace(/^[•\-*–—]\s+/, "").trim();
-      const yearNext = /\b(19|20)\d{2}\b/.test(nextClean);
-      const looksLikeHeader = (yearHere || yearNext) && clean.length < 120 && !/[.!?]$/.test(clean);
+      const nextIsBullet = BULLET_RE.test(nextRaw);
+      const next = nextRaw.replace(BULLET_RE, "").trim();
+      const endsSentence = /[.!?]$/.test(clean);
 
-      if (looksLikeHeader) {
+      // Title line followed by "Company | Location | Dates" (or by a dates-only line).
+      const metaNext = !nextIsBullet && (isMetaLine(next) || (DATE_RANGE_RE.test(next) && next.length < 40));
+      if (metaNext && clean.length < 100 && !endsSentence && !isMetaLine(clean)) {
         if (current) roles.push(current);
-        let header = clean;
-        if (!yearHere && yearNext) {
-          header = `${clean} | ${nextClean}`;
-          index += 1;
-        }
-        current = parseRoleHeader(header, fallbackTitle);
+        current = blankRole({ title: clean, ...(next.includes("|") ? parseMetaLine(next) : { dates: next }) });
+        last = "header";
+        index += 1;
         continue;
       }
 
-      if (current && current.bullets.length === 0 && clean.length < 90 && !/[.!?]$/.test(clean) && (!current.company || current.company.length < 2)) {
-        if (!current.company) current.company = clean;
-        else current.location = clean;
+      // Single-line header such as "Title | Company | 2020 – 2022".
+      if (DATE_RANGE_RE.test(clean) && clean.length < 140 && !endsSentence) {
+        if (current) roles.push(current);
+        current = { ...blankRole(), ...parseRoleHeader(clean, fallbackTitle) };
+        last = "header";
         continue;
       }
 
-      if (!current) current = { company: "", title: fallbackTitle, dates: "", location: "", bullets: [] };
-      if (clean.length > 8) current.bullets.push(clean);
+      if (!current) current = blankRole();
+
+      // A wrapped line belongs to the bullet (or intro) above it, not to a new bullet.
+      if (last === "bullet") {
+        current.bullets[current.bullets.length - 1] = joinWrapped(current.bullets[current.bullets.length - 1], clean);
+        continue;
+      }
+      if (!current.company && !current.intro && clean.length < 90 && !endsSentence) {
+        current.company = clean;
+        continue;
+      }
+      current.intro = joinWrapped(current.intro, clean);
+      last = "intro";
     }
     if (current) roles.push(current);
 
-    let filtered = roles.filter((role) => role.bullets.length || role.company || role.title);
+    let filtered = roles.filter((role) => role.bullets.length || role.company || role.title || role.intro);
     if (!filtered.length) {
       const bullets = lines
         .filter((line) => !/^(experience|employment|work experience)$/i.test(line))
-        .map((line) => line.replace(/^[•\-*–—]\s+/, "").trim())
+        .map((line) => line.replace(BULLET_RE, "").trim())
         .filter((line) => line.length > 25);
-      if (bullets.length) filtered = [{ company: "", title: fallbackTitle, dates: "", location: "", bullets }];
+      if (bullets.length) filtered = [blankRole({ bullets })];
     }
-    return filtered.slice(0, 6).map((role) => ({ ...role, bullets: role.bullets.slice(0, 8) }));
+    return filtered.slice(0, 10).map((role) => ({ ...role, bullets: role.bullets.slice(0, 14) }));
+  }
+
+  function parseProjects(lines) {
+    const entries = [];
+    lines.forEach((raw) => {
+      const text = raw.replace(BULLET_RE, "").trim();
+      if (!text) return;
+      if (BULLET_RE.test(raw) || !entries.length) entries.push(text);
+      else entries[entries.length - 1] = joinWrapped(entries[entries.length - 1], text);
+    });
+    return entries
+      .map((entry) => {
+        const links = [];
+        let text = entry.replace(/⟦([^|⟧]+)\|([^⟧]+)⟧/g, (all, label, url) => {
+          links.push({ label: label.trim(), url: url.trim() });
+          return "";
+        });
+        text = text
+          .replace(/\s*\|\s*(?=\s*$)/g, "")
+          .replace(/\s+(?:(?:Live|Demo|Code|GitHub|Link)\s*\|\s*)+(?:Live|Demo|Code|GitHub|Link)\s*$/i, "")
+          .replace(/(\.)\s+(?:Live|Demo|Code|GitHub|Link)\s*$/i, "$1")
+          .replace(/\s*\|\s*$/, "")
+          .trim();
+        const match = text.match(/^(.+?)\s*(?:\(([^)]*)\))?\s*:\s*(.*)$/);
+        if (match) return { name: match[1].trim(), tech: (match[2] || "").trim(), description: match[3].trim(), links };
+        return { name: text.split(/\s+[–—-]\s+/)[0].slice(0, 60), tech: "", description: text, links };
+      })
+      .filter((project) => project.name);
+  }
+
+  function parseEducationLine(line) {
+    const text = line.replace(BULLET_RE, "").trim();
+    const dash = text.match(/\s+[–—-]\s+|[–—]/);
+    let head = text;
+    let tail = "";
+    if (dash) {
+      head = text.slice(0, dash.index).trim();
+      tail = text.slice(dash.index + dash[0].length).trim();
+    } else if (text.includes("|")) {
+      const [first, ...rest] = text.split(/\s*\|\s*/);
+      head = first;
+      tail = rest.join(" | ");
+    }
+    const pieces = tail.split(/\s*\|\s*/).map((piece) => piece.trim()).filter(Boolean);
+    const datePattern = /^(?:(?:19|20)\d{2})(?:\s*[–—-]\s*(?:(?:19|20)\d{2}|present|current))?$/i;
+    const dates = pieces.find((piece) => datePattern.test(piece)) || "";
+    const rest = pieces.filter((piece) => piece !== dates);
+    return { title: head, institution: rest[0] || "", detail: rest.slice(1).join(" | "), dates };
   }
 
   function parseResumeText(raw) {
@@ -2297,80 +2642,123 @@ HARD RULES:
       .filter(Boolean);
     const fullText = lines.join("\n");
 
-    const email = (fullText.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i) || [])[0] || state.resume.email || "";
-    const phone = (fullText.match(/(?:\+?\d[\d\s().-]{8,}\d)/) || [])[0]?.trim() || state.resume.phone || "";
-    const website =
-      (fullText.match(/(?:https?:\/\/|linkedin\.com\/|github\.com\/)[^\s|,]+/i) || [])[0] || state.resume.website || "";
-    const locationMatch = fullText.match(/\b(Mumbai|Bengaluru|Bangalore|Delhi|Gurugram|Noida|Pune|Hyderabad|Chennai|Kolkata|Remote|India)\b[^\n|,]{0,28}/i);
-    const location = locationMatch ? locationMatch[0].trim() : state.resume.location || "";
+    const headings = [
+      { key: "summary", re: /^(professional\s+)?(summary|profile|objective)\b/i },
+      { key: "experience", re: /^(work\s+|professional\s+)?experience\b|^employment\b/i },
+      { key: "skills", re: /^(core\s+|technical\s+|key\s+)?(skills|competencies)\b/i },
+      { key: "projects", re: /^(key\s+|selected\s+|personal\s+)?projects?\b/i },
+      { key: "education", re: /^education\b|^academics\b/i },
+      { key: "certifications", re: /^certifications?\b|^licenses?\b/i },
+      { key: "awards", re: /^awards?\b|^achievements\b|^honou?rs\b/i },
+    ];
+    // A heading is a short all-caps/short line, or "Heading: text". This keeps a wrapped sentence that merely starts with "Projects" from being read as a heading.
+    const matchHeading = (line) => {
+      if (line.length >= 70 || BULLET_RE.test(line)) return null;
+      for (const heading of headings) {
+        const hit = heading.re.exec(line);
+        if (!hit) continue;
+        const after = line.slice(hit[0].length);
+        const rest = after.replace(/^[:\s–—-]+/, "").trim();
+        const hasSeparator = /^\s*[:–—-]/.test(after);
+        const shortHeading = /&|^[^a-z]*$/.test(line) || line.split(/\s+/).length <= 4;
+        if (!rest && shortHeading) return { key: heading.key, rest: "" };
+        if (rest && hasSeparator) return { key: heading.key, rest };
+        // "CERTIFICATIONS & AWARDS" style combined headings
+        if (/^(&|and)\s+[A-Za-z ]{3,25}$/i.test(rest) && line.split(/\s+/).length <= 5) return { key: heading.key, rest: "" };
+      }
+      return null;
+    };
+
+    const firstHeadingIndex = lines.findIndex((line) => matchHeading(line));
+    const headerLines = lines.slice(0, firstHeadingIndex === -1 ? Math.min(lines.length, 6) : Math.min(firstHeadingIndex, 8));
+
+    const emailRe = /^[\w.+-]+@[\w.-]+\.[a-z]{2,}$/i;
+    const linkRe = /^(?:https?:\/\/)?(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:\/\S*)?$/i;
+    const tokens = headerLines.slice(1).flatMap((line) => line.split(/\s*[|•·]\s*/)).map((token) => token.trim()).filter(Boolean);
+    let email = "";
+    let phone = "";
+    let location = "";
+    const links = [];
+    tokens.forEach((token) => {
+      if (emailRe.test(token)) email = email || token;
+      else if (/^\+?\d[\d\s().-]{8,}\d$/.test(token) && token.replace(/\D/g, "").length >= 9) phone = phone || token;
+      else if (linkRe.test(token) && !/\s/.test(token)) links.push(token);
+      else if (!location && /[A-Za-z]/.test(token) && token.length < 40 && /^[A-Z]/.test(token) && headerLines.indexOf(headerLines.find((line) => line.includes(token))) >= 2) location = token;
+    });
+    email = email || (fullText.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i) || [])[0] || state.resume.email || "";
+    phone = phone || (fullText.match(/(?:\+?\d[\d\s().-]{8,}\d)/) || [])[0]?.trim() || state.resume.phone || "";
+    if (!links.length) {
+      const found = fullText.match(/(?:https?:\/\/|linkedin\.com\/|github\.com\/)[^\s|,]+/gi) || [];
+      links.push(...found);
+    }
+    if (!location) {
+      const hit = fullText.match(/\b(Mumbai|Bengaluru|Bangalore|Delhi|Gurugram|Noida|Pune|Hyderabad|Chennai|Kolkata|Remote|India)\b[^\n|,]{0,28}/i);
+      location = hit ? hit[0].trim() : state.resume.location || "";
+    }
 
     let name = lines[0] || state.resume.name || "Your name";
     if (name.length > 55 || /@|https?:|linkedin|\b(19|20)\d{2}\b/i.test(name) || /resume|curriculum vitae|biodata/i.test(name)) {
       name = state.resume.name || "Your name";
     }
     let title = state.resume.title || "";
-    if (lines[1] && lines[1].length < 80 && !/@|https?:|linkedin|\b(19|20)\d{2}\b/i.test(lines[1]) && !/summary|profile|experience|education|skills/i.test(lines[1])) {
+    if (lines[1] && lines[1].length < 90 && !/@|https?:|linkedin|\b(19|20)\d{2}\b/i.test(lines[1]) && !/summary|profile|experience|education|skills/i.test(lines[1])) {
       title = lines[1];
     }
 
-    const headings = [
-      { key: "summary", re: /^(professional\s+)?(summary|profile|objective)\b/i },
-      { key: "experience", re: /^(work\s+|professional\s+)?experience\b|^employment\b/i },
-      { key: "skills", re: /^(core\s+|technical\s+|key\s+)?(skills|competencies)\b/i },
-      { key: "education", re: /^education\b|^academics\b/i },
-      { key: "certifications", re: /^certifications?\b|^licenses?\b/i },
-    ];
-    const sections = { summary: [], experience: [], skills: [], education: [], certifications: [] };
+    const sections = { summary: [], experience: [], skills: [], projects: [], education: [], certifications: [], awards: [] };
     let current = null;
     lines.forEach((line) => {
-      if (line.length < 70) {
-        const heading = headings.find((item) => item.re.test(line));
-        if (heading) {
-          current = heading.key;
-          const rest = line.replace(heading.re, "").replace(/^[:\s–—-]+/, "").trim();
-          if (rest) sections[current].push(rest);
-          return;
-        }
+      const heading = matchHeading(line);
+      if (heading) {
+        current = heading.key;
+        if (heading.rest) sections[current].push(heading.rest);
+        return;
       }
       if (current) sections[current].push(line);
     });
 
-    const summary = sections.summary.join(" ").trim() || state.resume.summary || "";
-    const skills = sections.skills
-      .flatMap((line) => line.replace(/^[•\-*–—]\s+/, "").split(/[,;|•·]/))
-      .map((skill) => skill.trim())
-      .filter((skill) => skill.length > 1 && skill.length < 38);
+    const summary = sections.summary.reduce((text, line) => joinWrapped(text, line), "").trim() || state.resume.summary || "";
+    const skillGroups = parseSkillGroups(sections.skills);
     const experience = parseExperienceSection(sections.experience, title);
-    const education = sections.education
-      .filter((line) => line.length > 3)
-      .map((line) => {
-        const parts = line.replace(/^[•\-*–—]\s+/, "").split(/\s*[|•]\s*|\s+[—–]\s+/).map((part) => part.trim()).filter(Boolean);
-        const dates = (line.match(/\b(19|20)\d{2}\b[^|•]{0,20}/g) || []).join(" · ");
-        return {
-          school: parts[0] || line,
-          degree: parts[1] || "",
-          dates,
-        };
-      })
-      .slice(0, 4);
-    const certifications = sections.certifications
-      .map((line) => line.replace(/^[•\-*–—]\s+/, "").trim())
-      .filter((line) => line.length > 2)
-      .slice(0, 8);
+    const projects = parseProjects(sections.projects);
+    const education = sections.education.filter((line) => line.length > 3).map(parseEducationLine).slice(0, 6);
 
-    return {
+    const certLines = [];
+    const awardLines = [...sections.awards];
+    let inAwards = false;
+    sections.certifications.forEach((line) => {
+      const award = line.match(/^awards?\b\s*[:–-]?\s*(.*)$/i);
+      if (award) {
+        inAwards = true;
+        if (award[1]) awardLines.push(award[1]);
+        return;
+      }
+      (inAwards ? awardLines : certLines).push(line);
+    });
+    const listFrom = (entries) => {
+      const clean = entries.map((line) => line.replace(BULLET_RE, "").trim()).filter(Boolean);
+      const joined = clean.reduce((text, line) => joinWrapped(text, line), "");
+      return joined.includes(";") ? splitTopLevel(joined, ";") : clean;
+    };
+    const certifications = listFrom(certLines).filter((item) => item.length > 2).slice(0, 12);
+    const awards = listFrom(awardLines).filter((item) => item.length > 1).slice(0, 12);
+
+    return normalizeResume({
       name,
       title,
       email,
       phone,
       location,
-      website,
+      links: Array.from(new Set(links)),
       summary,
-      skills: Array.from(new Set(skills.length ? skills : state.resume.skills || [])),
-      experience: experience.length ? experience : [],
-      education: education.length ? education : state.resume.education || [],
-      certifications: certifications.length ? certifications : [],
-    };
+      skills: [],
+      skillGroups,
+      experience,
+      projects,
+      education,
+      certifications,
+      awards,
+    });
   }
 
   function hydrateSearch() {

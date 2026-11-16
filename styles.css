@@ -851,42 +851,16 @@ select.text-input { appearance: none; cursor: pointer; background-image: linear-
 .tab-pane { display: none; flex: 1; min-height: 0; }
 .tab-pane.active { display: block; }
 .paper-wrap { padding: 22px; background: #0a0908; min-height: 100%; display: flex; justify-content: center; }
+/* A4 page at 96dpi (595.32pt) with the master CV's 36pt / 41pt margins. Element styles come from paperCss() in app.js. */
 .paper {
-  width: 100%; max-width: 750px;
-  background: #fbf9f3; color: #201c17;
-  border-radius: 3px; padding: 42px 48px 46px;
+  width: 100%; max-width: 794px;
+  background: #fff; color: #1f2a44;
+  border-radius: 2px; padding: 36pt 41pt;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-  font-size: 10.5px; line-height: 1.55;
+  font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+  font-size: 10pt; line-height: 1.22;
   align-self: flex-start;
 }
-.paper-header { text-align: center; padding-bottom: 14px; border-bottom: 1.5px solid #2a241c; }
-.paper-name { font-family: var(--font-display); font-size: 27px; font-weight: 600; letter-spacing: -0.035em; line-height: 1.1; color: #17130e; }
-.paper-role { font-size: 11px; color: #5c5348; letter-spacing: 0.05em; margin-top: 4px; }
-.paper-contact { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 8.5px; color: #544b3f; }
-.paper-contact span { display: inline-flex; align-items: center; gap: 4px; }
-.paper-contact svg { width: 9px; height: 9px; color: #827a6c; }
-.paper-section { margin-top: 16px; }
-.paper-section-title { font-family: var(--font-mono); font-size: 8.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #16120c; padding-bottom: 4px; border-bottom: 1px solid #cdc4b4; margin-bottom: 8px; }
-.paper-summary { color: #3a332a; }
-.paper-skills { display: flex; flex-wrap: wrap; gap: 4px 6px; }
-.paper-skill { font-size: 8.5px; padding: 1px 5px; border-radius: 3px; background: #f2eee5; color: #443c31; border: 1px solid #e4ded1; }
-.paper-skill.emphasis { background: #f3ead6; color: #7a5b18; border-color: #e3d2a8; }
-.paper-role-item { margin-bottom: 11px; }
-.paper-role-item:last-child { margin-bottom: 0; }
-.paper-role-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.paper-role-head strong { font-size: 10.5px; font-weight: 650; color: #17130e; }
-.paper-role-head span { font-family: var(--font-mono); font-size: 8px; color: #726a5c; white-space: nowrap; }
-.paper-role-sub { display: flex; justify-content: space-between; gap: 12px; font-size: 9px; color: #625a4e; margin-top: 1px; }
-.paper-role-sub span:last-child { font-family: var(--font-mono); font-size: 7.8px; }
-.paper-bullets { margin: 5px 0 0; padding-left: 13px; }
-.paper-bullets li { margin-bottom: 3px; color: #3a332a; }
-.paper-bullets li::marker { color: #9a9184; }
-.paper mark { background: #f5e7c4; color: #6b4e12; padding: 0 1px; border-radius: 2px; }
-.paper-edu { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; }
-.paper-edu strong { font-size: 9.5px; font-weight: 600; color: #26211a; }
-.paper-edu span { font-family: var(--font-mono); font-size: 7.8px; color: #726a5c; white-space: nowrap; }
-.paper-edu p { font-size: 9px; color: #625a4e; margin-top: 1px; }
-.paper-footnote { margin-top: 16px; padding-top: 8px; border-top: 1px solid #e6dfd2; font-size: 7.5px; color: #938a7c; text-align: center; font-style: italic; }
 
 /* Diff viewer */
 .diff-wrap { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
@@ -1143,8 +1117,7 @@ select.text-input { appearance: none; cursor: pointer; background-image: linear-
   .gen-copy h3 { font-size: 20px; }
   .result-toolbar { padding: 10px 12px; }
   .paper-wrap { padding: 10px; }
-  .paper { padding: 28px 22px 30px; }
-  .paper-name { font-size: 23px; }
+  .paper { padding: 20px 16px 22px; }
   .diff-wrap, .analysis-wrap { padding: 12px; }
   .analysis-grid { grid-template-columns: 1fr; }
   .track-main, .track-side { padding: 16px; }
