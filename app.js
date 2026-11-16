@@ -68,7 +68,7 @@
     return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
   };
 
-  const defaultLive = () => ({ key: "", page: 0, jobs: [], hasMore: false, fetchedAt: 0 });
+  const defaultLive = () => ({ key: "", page: 0, cursor: "", searchedQuery: "", jobs: [], hasMore: false, fetchedAt: 0 });
 
   const defaultState = () => ({
     applications: [],
@@ -521,8 +521,13 @@
     const params = new URLSearchParams({ q: role, page: String(page) });
     if (state.prefs.location) params.set("location", state.prefs.location.trim());
     if (state.prefs.remote) params.set("remote", "1");
+    if (more && live.cursor) {
+      params.set("cursor", live.cursor);
+      if (live.searchedQuery) params.set("sq", live.searchedQuery);
+    }
 
     liveSearching = true;
+    const previous = state.live ? { ...state.live } : defaultLive();
     if (!more) state.live = { ...defaultLive(), key };
     renderJobs();
     const submit = $("#searchForm .search-submit");
@@ -538,11 +543,14 @@
       const incoming = (data.jobs || []).map(normalizeLiveJob);
       const existing = more ? state.live.jobs : [];
       const ids = new Set(existing.map((job) => job.id));
+      const fresh = incoming.filter((job) => !ids.has(job.id));
       state.live = {
         key,
         page,
-        jobs: [...existing, ...incoming.filter((job) => !ids.has(job.id))].slice(0, 100),
-        hasMore: Boolean(data.hasMore),
+        cursor: String(data.cursor || ""),
+        searchedQuery: String(data.searchedQuery || ""),
+        jobs: [...existing, ...fresh].slice(0, 100),
+        hasMore: Boolean(data.hasMore) && (!more || fresh.length > 0),
         fetchedAt: Date.now(),
       };
       analysisCache.clear();
@@ -551,6 +559,8 @@
         showToast("No live results", "Try a broader role or a different city.", "info");
       }
     } catch (error) {
+      // Keep whatever was already on screen instead of blanking the feed.
+      state.live = previous;
       const message = /Failed to fetch|NetworkError/i.test(error.message || "")
         ? "Could not reach the search service. Check your connection."
         : error.message;

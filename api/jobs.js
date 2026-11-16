@@ -19,10 +19,11 @@ function clean(value, max) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function employmentType(value) {
+function employmentType(job) {
   const map = { FULLTIME: "Full-time", PARTTIME: "Part-time", CONTRACTOR: "Contract", INTERN: "Internship" };
-  const first = String(value || "").split(/[,\s]+/)[0].toUpperCase();
-  return map[first] || "Full-time";
+  const list = Array.isArray(job.job_employment_types) ? job.job_employment_types : [];
+  const raw = (list[0] || job.job_employment_type || "").toString().toUpperCase().replace(/[^A-Z]/g, "");
+  return map[raw] || (raw.startsWith("CONTRACT") ? "Contract" : "Full-time");
 }
 
 function seniority(title) {
@@ -46,11 +47,14 @@ function formatAmount(value, currency) {
   return String(Math.round(value));
 }
 
-function formatSalary(job, country) {
+function formatSalary(job) {
   const min = Number(job.job_min_salary) || 0;
   const max = Number(job.job_max_salary) || 0;
-  if (!min && !max) return typeof job.job_salary === "string" && job.job_salary.trim() ? job.job_salary.trim() : "Not disclosed";
-  const currency = String(job.job_salary_currency || (country === "in" ? "INR" : "")).toUpperCase();
+  const label = clean(job.job_salary_string, 60) || (typeof job.job_salary === "string" ? clean(job.job_salary, 60) : "");
+  if (!min && !max) return label || "Not disclosed";
+  // The API gives no currency, so only treat amounts as rupees for jobs located in India.
+  const currency = String(job.job_salary_currency || (String(job.job_country).toUpperCase() === "IN" ? "INR" : "")).toUpperCase();
+  if (currency !== "INR" && label) return label;
   const period = String(job.job_salary_period || "").toUpperCase();
   const range = [min, max].filter(Boolean).map((value) => formatAmount(value, currency)).join("–");
   if (currency === "INR" && period === "YEAR" && Math.max(min, max) >= 100000) return `₹${range} LPA`;
@@ -66,7 +70,7 @@ function postedHours(job) {
   return Math.max(0, Math.round((Date.now() - time) / 3_600_000));
 }
 
-function mapJob(job, country) {
+function mapJob(job) {
   const title = clean(job.job_title, 160);
   const description = String(job.job_description || "").slice(0, 12000);
   const remote = Boolean(job.job_is_remote);
@@ -75,15 +79,16 @@ function mapJob(job, country) {
     [job.job_city, job.job_state, job.job_country].filter(Boolean).join(", ") ||
     (remote ? "Remote" : "Not specified");
   return {
-    id: `js-${String(job.job_id || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80)}`,
+    // job_id changes between requests for the same posting; job_uid is stable.
+    id: `js-${String(job.job_uid || job.job_id || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80)}`,
     title,
     company: clean(job.employer_name, 120) || "Unknown company",
     location,
     remote,
     mode: remote ? "Remote" : "On-site",
-    type: employmentType(job.job_employment_type),
+    type: employmentType(job),
     experience: seniority(title),
-    salary: formatSalary(job, country),
+    salary: formatSalary(job),
     postedHours: postedHours(job),
     source: clean(job.job_publisher, 60) || "JSearch",
     category: category(`${title} ${description}`),
@@ -91,6 +96,80 @@ function mapJob(job, country) {
     description,
     url: job.job_apply_link || job.job_google_link || "",
   };
+}
+
+function pickCity(value) {
+  return (
+    String(value || "")
+      .split(/[\/,;|()]|\s+or\s+|\s+and\s+/i)
+      .map((token) => token.trim())
+      .filter((token) => token && !/^remote$/i.test(token) && !/^any(where)?$/i.test(token))
+      .map((token) => clean(token, 60))
+      .shift() || ""
+  );
+}
+
+function looksRemote(value) {
+  return /\bremote\b|\bwfh\b|\bwork from home\b/i.test(String(value || ""));
+}
+
+function readJobs(body) {
+  if (!body || typeof body !== "object") return [];
+  if (Array.isArray(body.data)) return body.data;
+  if (Array.isArray(body.data?.jobs)) return body.data.jobs;
+  if (Array.isArray(body.jobs)) return body.jobs;
+  return [];
+}
+
+const ENDPOINTS = [
+  { url: "https://jsearch.p.rapidapi.com/search-v2", host: "jsearch.p.rapidapi.com" },
+  { url: "https://jsearch.p.rapidapi.com/search", host: "jsearch.p.rapidapi.com" },
+  { url: "https://jsearch-mega.p.rapidapi.com/search", host: "jsearch-mega.p.rapidapi.com" },
+];
+
+async function queryJSearch({ key, query, page, cursor, country, date, remoteOnly, signal }) {
+  let lastStatus = 0;
+  let lastDetail = "";
+  for (const endpoint of ENDPOINTS) {
+    const upstream = new URL(endpoint.url);
+    const isV2 = endpoint.url.endsWith("/search-v2");
+    upstream.searchParams.set("query", query);
+    // search-v2 ignores `page` for later results and returns repeats; it paginates with a cursor.
+    if (isV2 && cursor) upstream.searchParams.set("cursor", cursor);
+    else if (!isV2 || page > 1) upstream.searchParams.set("page", String(page));
+    upstream.searchParams.set("num_pages", "1");
+    upstream.searchParams.set("country", country);
+    upstream.searchParams.set("date_posted", date);
+    if (remoteOnly) {
+      upstream.searchParams.set("work_from_home", "true");
+      upstream.searchParams.set("remote_jobs_only", "true");
+    }
+
+    const response = await fetch(upstream.toString(), {
+      signal,
+      headers: { "x-rapidapi-key": key, "x-rapidapi-host": endpoint.host },
+    });
+
+    if (response.ok) {
+      const body = await response.json();
+      return { ok: true, jobs: readJobs(body), cursor: isV2 ? String(body?.data?.cursor || "") : "", status: 200, detail: "" };
+    }
+
+    lastStatus = response.status;
+    if (response.status === 404) {
+      // This path is not active for the account's subscription; try the next candidate.
+      continue;
+    }
+    try {
+      const body = await response.json();
+      lastDetail = body?.message || body?.error?.message || JSON.stringify(body);
+    } catch (error) {
+      lastDetail = "";
+    }
+    // 401/403/429 are auth or quota problems: retrying other endpoints would waste quota.
+    break;
+  }
+  return { ok: false, jobs: [], cursor: "", status: lastStatus, detail: lastDetail };
 }
 
 module.exports = async function handler(req, res) {
@@ -112,90 +191,58 @@ module.exports = async function handler(req, res) {
 
   if (q.length < 2) return send(res, 400, { ok: false, error: "Enter a role, skill or company to search." });
 
-  const candidateConfigs = [
-    { url: "https://jsearch.p.rapidapi.com/search-v2", host: "jsearch.p.rapidapi.com" },
-    { url: "https://jsearch.p.rapidapi.com/search", host: "jsearch.p.rapidapi.com" },
-    { url: "https://jsearch-mega.p.rapidapi.com/search", host: "jsearch-mega.p.rapidapi.com" },
-  ];
+  const city = pickCity(location);
+  const remoteOnly = remote || looksRemote(location);
+  const cursor = String(params.get("cursor") || "").slice(0, 4000);
+  const searchedQuery = clean(params.get("sq"), 200);
+
+  // Try the focused query first. If the city narrows it to nothing, retry nationwide
+  // so a typo or an unusual city name does not leave the feed empty.
+  // A cursor belongs to the exact query that produced it, so "load more" reuses that query.
+  const attempts = cursor && searchedQuery ? [searchedQuery] : city ? [`${q} in ${city}`, q] : [q];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25_000);
-  
   try {
-    let response = null;
-    let lastErrorDetail = "";
-    let lastStatus = 0;
-
-    for (const config of candidateConfigs) {
-      const upstream = new URL(config.url);
-      upstream.searchParams.set("query", location && !/^remote$/i.test(location) ? `${q} in ${location}` : q);
-      upstream.searchParams.set("page", String(page));
-      upstream.searchParams.set("num_pages", "1");
-      upstream.searchParams.set("country", country);
-      upstream.searchParams.set("date_posted", date);
-      if (remote || /^remote$/i.test(location)) {
-        upstream.searchParams.set("work_from_home", "true");
-        upstream.searchParams.set("remote_jobs_only", "true");
-      }
-
-      response = await fetch(upstream.toString(), {
-        signal: controller.signal,
-        headers: { "x-rapidapi-key": key, "x-rapidapi-host": config.host },
-      });
-
-      if (response.ok) break;
-
-      lastStatus = response.status;
-      if (response.status === 404) {
-        // 404 means this endpoint route/host combination is not active for this account/subscription, try next candidate
-        continue;
-      } else {
-        // 401, 403, 429 etc are fatal auth/quota errors so don't retry endpoints
-        try {
-          const errBody = await response.json();
-          lastErrorDetail = errBody.message || JSON.stringify(errBody);
-        } catch (e) {}
-        break;
-      }
+    let result = null;
+    let usedQuery = attempts[0];
+    for (const query of attempts) {
+      usedQuery = query;
+      result = await queryJSearch({ key, query, page, cursor, country, date, remoteOnly, signal: controller.signal });
+      if (!result.ok || result.jobs.length) break;
     }
 
-    if (!response || !response.ok) {
-      const status = response ? response.status : lastStatus;
+    if (!result || !result.ok) {
+      const status = result?.status || 0;
       const messages = {
         401: "JSearch rejected the API key. Check JSEARCH_API_KEY.",
         403: "JSearch rejected the API key or you are not subscribed to the JSearch plan on RapidAPI.",
         404: "JSearch endpoint not found. The API might have changed or the URL is incorrect.",
         429: "JSearch quota or rate limit reached. Try again later.",
       };
-      return send(res, 502, { 
-        ok: false, 
-        error: messages[status] || `JSearch returned ${status}.`,
-        detail: lastErrorDetail
+      return send(res, 502, {
+        ok: false,
+        error: messages[status] || `JSearch returned ${status || "an error"}.`,
+        detail: result?.detail || "",
       });
     }
 
-    const body = await response.json();
-    const rawJobs = Array.isArray(body.data)
-      ? body.data
-      : Array.isArray(body.data?.jobs)
-      ? body.data.jobs
-      : Array.isArray(body.jobs)
-      ? body.jobs
-      : [];
+    const seen = new Set();
+    const jobs = result.jobs
+      .map((job) => mapJob(job))
+      .filter((job) => job.title && job.url && job.id !== "js-")
+      .filter((job) => !seen.has(job.id) && seen.add(job.id));
 
-    const jobs = rawJobs
-      .map((job) => mapJob(job, country))
-      .filter((job) => job.title && job.url && job.id !== "js-");
-
+    const hasMore = result.cursor ? jobs.length > 0 : jobs.length >= 10;
     return send(
       res,
       200,
-      { ok: true, query: q, location, page, jobs, hasMore: jobs.length >= 10 },
+      { ok: true, query: q, searchedQuery: usedQuery, location, city, page, jobs, hasMore, cursor: result.cursor },
       "public, max-age=0, s-maxage=21600, stale-while-revalidate=86400"
     );
   } catch (error) {
     const message = error.name === "AbortError" ? "JSearch took too long to respond." : "Could not reach JSearch.";
-    return send(res, 504, { ok: false, error: message });
+    return send(res, 504, { ok: false, error: message, detail: error.message || "" });
   } finally {
     clearTimeout(timer);
   }
