@@ -1,0 +1,22 @@
+{
+  "name": "job-finder",
+  "version": "1.0.0",
+  "description": "A personal workspace for job discovery, AI-powered resume tailoring, and application tracking.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aniketkumarray/JobFinder.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/aniketkumarray/JobFinder/issues"
+  },
+  "homepage": "https://github.com/aniketkumarray/JobFinder#readme"
+}
